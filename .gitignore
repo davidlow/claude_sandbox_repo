@@ -1,0 +1,9 @@
+# Ignore hidden Claude Code session states and local context caches
+.claude/
+claude.log
+
+# Ignore local OS or editor artifacts
+.DS_Store
+.idea/
+.vscode/
+*.swp
