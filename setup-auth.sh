@@ -1,12 +1,15 @@
 #!/bin/bash
+set -euo pipefail
 
 # ==============================================================================
 # claude-box-auth — One-time Claude Pro OAuth setup
 #
-# Logs you into Claude.ai using your Claude Pro account and saves the
-# credentials inside this repo's claude-auth/ directory. The launch scripts
-# mount that directory into every sandbox container so you are never asked
-# to log in again.
+# Runs `claude auth login` inside the sandbox container so the same Claude Code
+# version is used for auth as for actual runs. --network host shares the host's
+# localhost so the browser OAuth callback (http://localhost:PORT/callback) is
+# reachable when you complete the login. Credentials are saved into claude-auth/
+# in this repo and mounted into every future sandbox run — you are never
+# prompted to log in again.
 #
 # Run this once after cloning the repo, or whenever your session expires.
 #
@@ -14,45 +17,33 @@
 #    claude-box-auth
 # ==============================================================================
 
-set -euo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTH_DIR="$SCRIPT_DIR/claude-auth"
-
-if ! command -v claude &>/dev/null; then
-    echo "❌ 'claude' CLI not found on this machine."
-    echo "   Install it with:  npm install -g @anthropic-ai/claude-code"
-    echo "   Then re-run this script."
-    exit 1
-fi
 
 mkdir -p "$AUTH_DIR"
 
 echo "🔐 Logging into Claude.ai (Claude Pro)..."
-echo "   Credentials will be saved to: $AUTH_DIR"
 echo "   A browser window will open — complete the login there."
+echo "   Credentials will be saved to: $AUTH_DIR"
 echo ""
 
-# CLAUDE_CONFIG_DIR redirects where Claude Code reads/writes its config and
-# credentials, keeping this sandbox's session isolated from ~/.claude/ on the host.
-CLAUDE_CONFIG_DIR="$AUTH_DIR" claude login
+# Run login inside the sandbox container, not on the host:
+#   - Guarantees the same Claude Code version is used for auth and execution.
+#   - --network host shares the host's localhost so the OAuth callback URL
+#     (http://localhost:PORT/callback) opened in your browser can reach the
+#     local HTTP server that Claude Code starts inside the container.
+#   - claude-auth/ is mounted as ~/.claude so credentials persist after exit.
+docker run -it --rm \
+  --network host \
+  -v "$AUTH_DIR":/home/claudeuser/.claude \
+  claude-sandbox \
+  claude auth login --claudeai
 
-# Verify something was actually written
 if [ -z "$(ls -A "$AUTH_DIR" 2>/dev/null)" ]; then
     echo ""
-    echo "⚠️  Nothing was written to $AUTH_DIR."
-    echo "   Your Claude Code version may not support CLAUDE_CONFIG_DIR."
-    echo "   Falling back: copying credentials from ~/.claude/ ..."
-    if [ -d "$HOME/.claude" ] && [ -n "$(ls -A "$HOME/.claude" 2>/dev/null)" ]; then
-        cp -r "$HOME/.claude/." "$AUTH_DIR/"
-        echo "✅ Credentials copied from ~/.claude/ to $AUTH_DIR"
-    else
-        echo ""
-        echo "❌ No credentials found in ~/.claude/ either."
-        echo "   Run:  claude login"
-        echo "   Then: cp -r ~/.claude/. \"$AUTH_DIR/\""
-        exit 1
-    fi
+    echo "❌ No credentials were saved to $AUTH_DIR."
+    echo "   Try running this script again."
+    exit 1
 fi
 
 echo ""
