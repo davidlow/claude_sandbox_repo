@@ -21,8 +21,8 @@ set -euo pipefail # Hardens script execution against unhandled pipe failures
 #    claude-yolo "refactor the auth module for readability" claude-opus-4-8
 #    claude-yolo "add input validation to all API endpoints" claude-haiku-4-5
 #
-# ENVIRONMENT:
-#    ANTHROPIC_API_KEY   Required. Your Anthropic API key.
+# SETUP:
+#    Run claude-box-auth once before first use to save your Claude Pro login.
 #
 # SAFETY:
 #    - Claude has full read/write access to your current directory.
@@ -36,8 +36,12 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     exit 0
 fi
 
-if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-    echo "❌ Error: ANTHROPIC_API_KEY environment variable is not set."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AUTH_DIR="$SCRIPT_DIR/claude-auth"
+
+if [ ! -d "$AUTH_DIR" ] || [ -z "$(ls -A "$AUTH_DIR" 2>/dev/null)" ]; then
+    echo "❌ Error: No Claude credentials found in $AUTH_DIR"
+    echo "   Run 'claude-box-auth' first to log in with your Claude Pro account."
     exit 1
 fi
 
@@ -116,7 +120,7 @@ DOCKER_RUN_BASE=(
   docker run -it --rm
   --name "$CONTAINER_NAME"
   -v "$(pwd)":/workspace
-  -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+  -v "$AUTH_DIR":/home/claudeuser/.claude
   -e DISABLE_AUTO_COMPACT=0
   -e CLAUDE_CODE_MAX_CONTEXT_TOKENS="$MAX_CONTEXT_TOKENS"
   -e API_TARGET_INPUT_TOKENS="$TARGET_INPUT_TOKENS"
@@ -131,7 +135,7 @@ DOCKER_RECOVERY_BASE=(
   docker run -i --rm
   --name "${CONTAINER_NAME}-recovery"
   -v "$(pwd)":/workspace
-  -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+  -v "$AUTH_DIR":/home/claudeuser/.claude
   -e DISABLE_AUTO_COMPACT=0
   -e CLAUDE_CODE_MAX_CONTEXT_TOKENS="$MAX_CONTEXT_TOKENS"
   -e API_TARGET_INPUT_TOKENS="$TARGET_INPUT_TOKENS"

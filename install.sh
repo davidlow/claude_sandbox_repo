@@ -17,7 +17,7 @@ sudo usermod -aG docker "$USER"
 
 # 3. Ensure launch scripts are executable
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-chmod +x "$REPO_DIR/launch-interactive.sh" "$REPO_DIR/launch-scripted.sh"
+chmod +x "$REPO_DIR/launch-interactive.sh" "$REPO_DIR/launch-scripted.sh" "$REPO_DIR/setup-auth.sh"
 
 # 4. Build the core sandbox image
 echo "📦 Building the Claude Code Docker sandbox image..."
@@ -34,9 +34,15 @@ if ! grep -q "alias claude-yolo=" ~/.bashrc; then
     echo "alias claude-yolo='$REPO_DIR/launch-scripted.sh'" >> ~/.bashrc
 fi
 
+if ! grep -q "alias claude-box-auth=" ~/.bashrc; then
+    echo "alias claude-box-auth='$REPO_DIR/setup-auth.sh'" >> ~/.bashrc
+fi
+
 echo "=========================================================="
 echo "🎉 Setup Complete!"
 echo "👉 CRITICAL: If you are on a Chromebook, right-click the Terminal"
 echo "   app icon and select 'Shut down Linux', then reopen it."
 echo "👉 On native Debian, run: source ~/.bashrc (or open a new window)."
+echo ""
+echo "Next step: run 'claude-box-auth' to log in with your Claude Pro account."
 echo "=========================================================="

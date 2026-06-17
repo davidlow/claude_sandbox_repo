@@ -19,8 +19,8 @@
 #    claude-box
 #    claude-box claude-opus-4-8
 #
-# ENVIRONMENT:
-#    ANTHROPIC_API_KEY   Required. Your Anthropic API key.
+# SETUP:
+#    Run claude-box-auth once before first use to save your Claude Pro login.
 # ==============================================================================
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
@@ -28,8 +28,12 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     exit 0
 fi
 
-if [ -z "$ANTHROPIC_API_KEY" ]; then
-    echo "❌ Error: ANTHROPIC_API_KEY environment variable is not set on your host system."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AUTH_DIR="$SCRIPT_DIR/claude-auth"
+
+if [ ! -d "$AUTH_DIR" ] || [ -z "$(ls -A "$AUTH_DIR" 2>/dev/null)" ]; then
+    echo "❌ Error: No Claude credentials found in $AUTH_DIR"
+    echo "   Run 'claude-box-auth' first to log in with your Claude Pro account."
     exit 1
 fi
 
@@ -42,6 +46,6 @@ echo "🛡️  Spawning interactive sandbox using model: $CHOSEN_MODEL"
 docker run -it --rm \
   --name "$CONTAINER_NAME" \
   -v "$(pwd)":/workspace \
-  -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+  -v "$AUTH_DIR":/home/claudeuser/.claude \
   claude-sandbox \
   claude --model "$CHOSEN_MODEL"

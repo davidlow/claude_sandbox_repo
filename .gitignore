@@ -2,6 +2,9 @@
 .claude/
 claude.log
 
+# Ignore OAuth credentials — never commit these
+claude-auth/
+
 # Ignore local OS or editor artifacts
 .DS_Store
 .idea/
