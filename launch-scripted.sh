@@ -2,11 +2,15 @@
 set -euo pipefail # Hardens script execution against unhandled pipe failures
 
 # ==============================================================================
-# claude-yolo — Autonomous Claude Code Sandbox Runner
+# claude-yolo — Rate-Limit Adaptive Autonomous Sandbox Runner
 #
 # Launches Claude Code in a sandboxed Docker container in non-interactive
 # (scripted) mode. Claude executes the given task autonomously, bypassing
 # all permission prompts, and the container is destroyed when it exits.
+#
+# When Claude Pro's token quota is exhausted, the script detects the reset
+# time from the error message, waits (printing a status line every 5 minutes),
+# and resumes from the existing session automatically.
 #
 # USAGE:
 #    claude-yolo "your task description" [model]
@@ -81,8 +85,8 @@ if [[ "$CHOSEN_MODEL" == *"haiku"* ]]; then
     MAX_THINKING_TOKENS=0
 
 elif [[ "$CHOSEN_MODEL" == *"opus"* ]]; then
-    # Opus: Premium tier ($5/M). Give it full context capacity to solve massive architecture shifts,
-    # but run it on a strict, brief timeout chain to mitigate cost spikes.
+    # Opus: Premium tier. Give it full context capacity to solve massive architecture shifts,
+    # but run it on a strict, brief timeout chain to mitigate long-running sessions.
     MAX_MINUTES="5"
     MAX_RETRIES=2
     MAX_CONTEXT_TOKENS=120000
@@ -90,7 +94,7 @@ elif [[ "$CHOSEN_MODEL" == *"opus"* ]]; then
     MAX_THINKING_TOKENS=24000
 
 elif [[ "$CHOSEN_MODEL" == *"fable"* ]]; then
-    # Fable: Highest-tier computational model ($10/M). Needs ample room to cross-reference logs,
+    # Fable: Highest-tier computational model. Needs ample room to cross-reference logs,
     # but relies on the tightest time threshold to cut execution long before token limits fill up.
     MAX_MINUTES="4"
     MAX_RETRIES=2
@@ -108,6 +112,11 @@ SESSION_STARTED=false   # Flips to true after our first attempt creates a sessio
 # for Docker container naming conformity.
 SANITIZED_DIR=$(basename "$(pwd)" | tr -cs '[:alnum:]-' '-' | tr '[:upper:]' '[:lower:]')
 CONTAINER_NAME="claude-auto-${SANITIZED_DIR:-sandbox}"
+
+# Temp file captures a copy of each run's output so we can scan it for rate-limit
+# messages after the container exits. Cleaned up automatically on script exit.
+TEMP_LOG="/tmp/claude_exec_${SANITIZED_DIR}_$$.log"
+trap 'rm -f "$TEMP_LOG"' EXIT
 
 # Preflight: fail fast with a clear message rather than a Docker internal error.
 if ! docker info >/dev/null 2>&1; then
@@ -143,6 +152,33 @@ DOCKER_RECOVERY_BASE=(
   claude-sandbox
 )
 
+# Strip ANSI color/cursor codes and carriage returns so grep sees plain text.
+# The PTY inside the container produces these; they corrupt rate-limit message
+# parsing if left in place.
+strip_ansi() {
+    sed 's/\x1b\[[0-9;]*[A-Za-z]//g; s/\r//g' "$1"
+}
+
+# Block until the Claude Pro quota window reopens, printing a heartbeat line
+# every 5 minutes so the terminal shows the script is still alive.
+wait_for_quota() {
+    local target_epoch="$1"
+    local target_display="$2"
+    echo "💤 Entering standby. Quota resets at $target_display (including 5-min buffer)."
+    while true; do
+        local now remaining mins secs curr_time
+        now=$(date +%s)
+        remaining=$(( target_epoch - now ))
+        [ "$remaining" -le 0 ] && break
+        mins=$(( remaining / 60 ))
+        secs=$(( remaining % 60 ))
+        curr_time=$(date '+%H:%M:%S')
+        echo "   [$curr_time] Waiting... ${mins}m ${secs}s until $target_display"
+        sleep 300
+    done
+    echo "⏰ Quota window open. Resuming task..."
+}
+
 while [ $ATTEMPT -le $MAX_RETRIES ]; do
     echo "🚀 [Attempt $ATTEMPT/$MAX_RETRIES] Launching $CHOSEN_MODEL..."
     echo "⏳ Context: ${MAX_CONTEXT_TOKENS} | Thinking: ${MAX_THINKING_TOKENS} | Timeout: ${MAX_MINUTES}m"
@@ -154,13 +190,17 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
         # directory from a completely different prior task in the same directory.
         echo "📥 Resuming from existing session..."
         timeout "${MAX_MINUTES}m" "${DOCKER_RUN_BASE[@]}" claude --continue \
-            --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "$TASK_PROMPT"
+            --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "$TASK_PROMPT" \
+            2>&1 | tee "$TEMP_LOG"
     else
         # Fresh start: first attempt, or after Strategy B+C wiped .claude/.
         timeout "${MAX_MINUTES}m" "${DOCKER_RUN_BASE[@]}" claude \
-            --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "$TASK_PROMPT"
+            --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "$TASK_PROMPT" \
+            2>&1 | tee "$TEMP_LOG"
     fi
-    EXIT_CODE=$?
+    # PIPESTATUS[0] captures the exit code of the docker/timeout command, not tee.
+    # Using plain $? here would give tee's exit code instead, which is almost always 0.
+    EXIT_CODE=${PIPESTATUS[0]}
     SESSION_STARTED=true   # A session now exists on disk (even if the run failed)
     set -e
 
@@ -169,7 +209,47 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
         rm -f ".task_handoff.md"   # Clean up any checkpoint from a prior failed attempt
         SUCCESS=true
         break
-    elif [ $EXIT_CODE -eq 124 ]; then
+    fi
+
+    # ===========================================================================
+    # RATE LIMIT DETECTION
+    # Claude Pro emits a message like "try again after 14:00" or "resume at 2:00 PM"
+    # when the token quota is exhausted. We parse the reset time, sleep it out with
+    # a 5-minute safety buffer, then resume the same attempt.
+    #
+    # Crucially, rate-limit waits use `continue` to jump back to the top of the
+    # while loop WITHOUT incrementing ATTEMPT — so they don't consume a retry slot.
+    # ===========================================================================
+    if strip_ansi "$TEMP_LOG" | grep -qi "after [0-9]\{1,2\}:[0-9]\{2\}"; then
+        # Extract the time string; tail -1 takes the last match in case there are several.
+        # Handles both 24-hour ("14:00") and 12-hour ("2:00 PM") formats via optional AM/PM.
+        TARGET_TIME=$(strip_ansi "$TEMP_LOG" \
+            | grep -oi "after [0-9]\{1,2\}:[0-9]\{2\}\( *[AaPp][Mm]\)\?" \
+            | tail -1 \
+            | awk '{print $2, $3}' \
+            | xargs)
+
+        echo "🛑 [RATE LIMIT] Quota exhausted. Claude reported reset time: $TARGET_TIME"
+
+        # Resolve the clock time to an epoch timestamp. If the time has already passed
+        # today (e.g., the reset is just after midnight), advance to tomorrow.
+        TARGET_EPOCH=$(date -d "$TARGET_TIME" +%s 2>/dev/null \
+            || date -d "today $TARGET_TIME" +%s)
+        NOW_EPOCH=$(date +%s)
+        if [ "$TARGET_EPOCH" -lt "$NOW_EPOCH" ]; then
+            TARGET_EPOCH=$(date -d "tomorrow $TARGET_TIME" +%s)
+        fi
+        TARGET_EPOCH=$(( TARGET_EPOCH + 300 ))   # 5-minute safety buffer
+        TARGET_DISPLAY=$(date -d "@$TARGET_EPOCH" '+%H:%M:%S')
+
+        docker kill "$CONTAINER_NAME" 2>/dev/null || true
+        wait_for_quota "$TARGET_EPOCH" "$TARGET_DISPLAY"
+
+        # Resume the same attempt number — rate limit waits are not retry failures.
+        continue
+    fi
+
+    if [ $EXIT_CODE -eq 124 ]; then
         echo "⚠️  [TIMEOUT] Attempt $ATTEMPT exceeded the ${MAX_MINUTES}m limit."
     else
         echo "⚠️  [FAILURE] Attempt $ATTEMPT exited with code $EXIT_CODE."
