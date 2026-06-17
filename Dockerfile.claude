@@ -15,16 +15,16 @@ RUN apt-get update && apt-get install -y \
 # up the venv, so claudeuser owns it and can pip install during tasks.
 RUN useradd -m -u 1000 -s /bin/bash claudeuser
 
+# Install Claude Code. Pin to a specific version for reproducible image builds.
+# Update this when you want to pull in new Claude Code features or model support.
+# Find the latest version at: https://www.npmjs.com/package/@anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code@latest
+
 # Create the Python venv as claudeuser so it has write access for pip installs.
 USER claudeuser
 RUN python3 -m venv /home/claudeuser/.venv
 ENV PATH="/home/claudeuser/.venv/bin:$PATH"
 
-# Install Claude Code. Pin to a specific version for reproducible image builds.
-# Update this when you want to pull in new Claude Code features or model support.
-# Find the latest version at: https://www.npmjs.com/package/@anthropic-ai/claude-code
-# NOTE: version 0.2.29 is likely outdated — update to current before first use.
-RUN npm install -g @anthropic-ai/claude-code@0.2.29
 
 WORKDIR /workspace
 
