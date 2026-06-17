@@ -47,17 +47,17 @@ echo ""
 cp "$HOME/.claude/.credentials.json" "$AUTH_DIR/.credentials.json"
 chmod 600 "$AUTH_DIR/.credentials.json"
 
-# Claude Code's main config file lives in HOME (not inside .claude/).
-# Store it as .claude.json inside claude-auth/ so the container entrypoint
-# can restore it to the home directory on every container start.
-if [ -f "$HOME/.claude.json" ]; then
-    cp "$HOME/.claude.json" "$AUTH_DIR/.claude.json"
-fi
-
 # Claude Code settings (model prefs, theme, etc.)
 if [ -f "$HOME/.claude/settings.json" ]; then
     cp "$HOME/.claude/settings.json" "$AUTH_DIR/settings.json"
 fi
+
+# Note: ~/.claude.json is intentionally NOT copied from the host. That file
+# contains host-specific paths (/home/dhlinca/...) that cause Claude Code to
+# reset it to a blank state inside the container. Instead, the entrypoint
+# saves ~/.claude.json back to claude-auth/ after each run so settings
+# (theme, onboarding) persist. On the very first run a one-time setup wizard
+# fires — just select a theme (option 1 is fine) and you're done.
 
 # Verify the credentials work inside the container.
 # Capture to a variable first to avoid pipefail interacting with the pipeline.
@@ -67,7 +67,7 @@ AUTH_STATUS=$(docker run --rm \
     claude-sandbox \
     claude auth status 2>&1) || true
 
-if echo "$AUTH_STATUS" | grep -q '"loggedIn": true'; then
+if echo "$AUTH_STATUS" | tr -d '\r' | grep -q '"loggedIn": true'; then
     echo "✅ Credentials verified — Claude Pro subscription active."
     echo ""
     echo "   You can now run: claude-box"
