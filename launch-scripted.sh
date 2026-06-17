@@ -1,5 +1,8 @@
 #!/bin/bash
-set -euo pipefail # Hardens script execution against unhandled pipe failures
+set -eo pipefail # Hardens script execution against unhandled pipe failures
+# Note: -u (nounset) is intentionally omitted. Claude Code's bash shell
+# integration installs hooks that reference $ZSH_VERSION, which is unset in
+# bash. With -u active, those hooks error-out and break docker tee pipelines.
 
 # ==============================================================================
 # claude-yolo — Rate-Limit Adaptive Autonomous Sandbox Runner
