@@ -1,26 +1,31 @@
 FROM debian:bookworm-slim
 
-# Install dependencies, Node.js, Git, and dev tools safely
+# Install runtime dependencies only — build-essential (gcc/make) is not needed
+# by Claude Code and adds ~200MB to the image.
 RUN apt-get update && apt-get install -y \
     curl \
     git \
-    build-essential \
     python3 \
     python3-venv \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Establish a global Python virtual environment to avoid Bookworm system-package blocks
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Create a non-root user matching default Debian/Crostini UIDs before setting
+# up the venv, so claudeuser owns it and can pip install during tasks.
+RUN useradd -m -u 1000 -s /bin/bash claudeuser
 
-# Install Claude Code with an explicit version pin for reliability
+# Create the Python venv as claudeuser so it has write access for pip installs.
+USER claudeuser
+RUN python3 -m venv /home/claudeuser/.venv
+ENV PATH="/home/claudeuser/.venv/bin:$PATH"
+
+# Install Claude Code. Pin to a specific version for reproducible image builds.
+# Update this when you want to pull in new Claude Code features or model support.
+# Find the latest version at: https://www.npmjs.com/package/@anthropic-ai/claude-code
+# NOTE: version 0.2.29 is likely outdated — update to current before first use.
 RUN npm install -g @anthropic-ai/claude-code@0.2.29
 
-# Create a non-root user matching default Debian/Crostini UIDs
-RUN useradd -m -u 1000 -s /bin/bash claudeuser
-USER claudeuser
 WORKDIR /workspace
 
 CMD ["bash"]

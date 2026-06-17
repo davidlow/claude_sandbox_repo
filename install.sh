@@ -13,14 +13,17 @@ else
 fi
 
 # 2. Configure user groups
-sudo usermod -aG docker $USER
+sudo usermod -aG docker "$USER"
 
-# 3. Build the core sandbox image
-echo "📦 Building the Claude Code Docker sandbox image..."
+# 3. Ensure launch scripts are executable
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+chmod +x "$REPO_DIR/launch-interactive.sh" "$REPO_DIR/launch-scripted.sh"
+
+# 4. Build the core sandbox image
+echo "📦 Building the Claude Code Docker sandbox image..."
 docker build -t claude-sandbox -f "$REPO_DIR/Dockerfile.claude" "$REPO_DIR"
 
-# 4. Inject global aliases into ~/.bashrc if they don't exist
+# 5. Inject global aliases into ~/.bashrc if they don't exist
 echo "🔗 Registering global CLI wrappers in ~/.bashrc..."
 
 if ! grep -q "alias claude-box=" ~/.bashrc; then

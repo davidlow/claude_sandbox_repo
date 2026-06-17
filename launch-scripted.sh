@@ -48,6 +48,7 @@ if [ -z "${1:-}" ]; then
     exit 1
 fi
 
+ORIGINAL_TASK_PROMPT="$1"   # Never mutated — used when rebuilding retry prompts
 TASK_PROMPT="$1"
 CHOSEN_MODEL="${2:-claude-sonnet-4-6}" # Baseline default
 
@@ -56,9 +57,10 @@ CHOSEN_MODEL="${2:-claude-sonnet-4-6}" # Baseline default
 # Balances the deep context needs of elite models with aggressive host timeouts.
 #
 # MAX_CONTEXT_TOKENS  — The maximum memory cap before an auto-compaction trigger.
-# TARGET_INPUT_TOKENS — Target size for compressed context history.
-# MAX_THINKING_TOKENS — Reasoning token allocation for models with thinking models.
-# MAX_MINUTES         — Ultimate host circuit breaker to stop runaway financial loops.
+#                       Scales UP with model tier: bigger model = bigger context.
+# TARGET_INPUT_TOKENS — Soft target for tokens sent per API call (~50% of max).
+# MAX_THINKING_TOKENS — Reasoning token allocation. 0 = model doesn't support it.
+# MAX_MINUTES         — Hard circuit breaker. Tighter on expensive models.
 # ==============================================================================
 # Defaults (Sonnet Tier Baseline Setup)
 MAX_MINUTES="10"
@@ -73,13 +75,13 @@ if [[ "$CHOSEN_MODEL" == *"haiku"* ]]; then
     MAX_CONTEXT_TOKENS=50000
     TARGET_INPUT_TOKENS=25000
     MAX_THINKING_TOKENS=0
-    
+
 elif [[ "$CHOSEN_MODEL" == *"opus"* ]]; then
     # Opus: Premium tier ($5/M). Give it full context capacity to solve massive architecture shifts,
     # but run it on a strict, brief timeout chain to mitigate cost spikes.
-    MAX_MINUTES="5" 
+    MAX_MINUTES="5"
     MAX_RETRIES=2
-    MAX_CONTEXT_TOKENS=120000 
+    MAX_CONTEXT_TOKENS=120000
     TARGET_INPUT_TOKENS=60000
     MAX_THINKING_TOKENS=24000
 
@@ -96,77 +98,164 @@ fi
 
 ATTEMPT=1
 SUCCESS=false
+SESSION_STARTED=false   # Flips to true after our first attempt creates a session
 
-# Claude's Fix: Sanitizes paths, transforms spaces/symbols to dashes, and forces lower-case
-# for impeccable Docker container naming conformity.
+# Sanitizes paths, transforms spaces/symbols to dashes, forces lower-case
+# for Docker container naming conformity.
 SANITIZED_DIR=$(basename "$(pwd)" | tr -cs '[:alnum:]-' '-' | tr '[:upper:]' '[:lower:]')
 CONTAINER_NAME="claude-auto-${SANITIZED_DIR:-sandbox}"
 
-# Base Docker Command Blueprint (Fixed continuation backslashes)
+# Preflight: fail fast with a clear message rather than a Docker internal error.
+if ! docker info >/dev/null 2>&1; then
+    echo "❌ Error: Docker is not running or not accessible. Start Docker and try again."
+    exit 1
+fi
+
+# DOCKER_RUN_BASE: main task runs — -it allocates a PTY for Claude Code's TUI.
 DOCKER_RUN_BASE=(
-  docker run -it --rm \
-  --name "$CONTAINER_NAME" \
-  -v "$(pwd)":/workspace \
-  -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-  -e DISABLE_AUTO_COMPACT=0 \
-  -e CLAUDE_CODE_MAX_CONTEXT_TOKENS="$MAX_CONTEXT_TOKENS" \
-  -e API_TARGET_INPUT_TOKENS="$TARGET_INPUT_TOKENS" \
-  -e MAX_THINKING_TOKENS="$MAX_THINKING_TOKENS" \
+  docker run -it --rm
+  --name "$CONTAINER_NAME"
+  -v "$(pwd)":/workspace
+  -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+  -e DISABLE_AUTO_COMPACT=0
+  -e CLAUDE_CODE_MAX_CONTEXT_TOKENS="$MAX_CONTEXT_TOKENS"
+  -e API_TARGET_INPUT_TOKENS="$TARGET_INPUT_TOKENS"
+  -e MAX_THINKING_TOKENS="$MAX_THINKING_TOKENS"
+  claude-sandbox
+)
+
+# DOCKER_RECOVERY_BASE: recovery passes — no -t (no PTY) since these are automated
+# intermediate steps, not user-interactive sessions. Using -it here breaks when
+# called from non-TTY contexts and sends garbled output to the handoff prompt.
+DOCKER_RECOVERY_BASE=(
+  docker run -i --rm
+  --name "${CONTAINER_NAME}-recovery"
+  -v "$(pwd)":/workspace
+  -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+  -e DISABLE_AUTO_COMPACT=0
+  -e CLAUDE_CODE_MAX_CONTEXT_TOKENS="$MAX_CONTEXT_TOKENS"
+  -e API_TARGET_INPUT_TOKENS="$TARGET_INPUT_TOKENS"
+  -e MAX_THINKING_TOKENS="$MAX_THINKING_TOKENS"
   claude-sandbox
 )
 
 while [ $ATTEMPT -le $MAX_RETRIES ]; do
     echo "🚀 [Attempt $ATTEMPT/$MAX_RETRIES] Launching $CHOSEN_MODEL..."
-    echo "⏳ Boundaries -> Context Cap: ${MAX_CONTEXT_TOKENS} | Thinking Cap: ${MAX_THINKING_TOKENS} | Hard Timeout: ${MAX_MINUTES}m"
-    
+    echo "⏳ Context: ${MAX_CONTEXT_TOKENS} | Thinking: ${MAX_THINKING_TOKENS} | Timeout: ${MAX_MINUTES}m"
+
     set +e
-    if [ $ATTEMPT -eq 1 ]; then
-        # Turn 1: Fresh run or standard resumption entry point
-        "${DOCKER_RUN_BASE[@]}" claude --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "$TASK_PROMPT"
+    if [ "$SESSION_STARTED" = true ] && [ -d ".claude" ]; then
+        # Our own previous attempt created a session — resume from it.
+        # We check SESSION_STARTED to avoid accidentally picking up a .claude/
+        # directory from a completely different prior task in the same directory.
+        echo "📥 Resuming from existing session..."
+        timeout "${MAX_MINUTES}m" "${DOCKER_RUN_BASE[@]}" claude --continue \
+            --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "$TASK_PROMPT"
     else
-        # Subsequent Turns: Continue seamlessly from the newly compacted/intervened context
-        echo "📥 Resuming task execution from the newly streamlined context stream..."
-        "${DOCKER_RUN_BASE[@]}" claude --continue --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "$TASK_PROMPT"
+        # Fresh start: first attempt, or after Strategy B+C wiped .claude/.
+        timeout "${MAX_MINUTES}m" "${DOCKER_RUN_BASE[@]}" claude \
+            --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "$TASK_PROMPT"
     fi
     EXIT_CODE=$?
+    SESSION_STARTED=true   # A session now exists on disk (even if the run failed)
     set -e
 
     if [ $EXIT_CODE -eq 0 ]; then
-        echo "✅ Task completed successfully by Claude on Attempt $ATTEMPT."
+        echo "✅ Task completed successfully on attempt $ATTEMPT."
+        rm -f ".task_handoff.md"   # Clean up any checkpoint from a prior failed attempt
         SUCCESS=true
         break
     elif [ $EXIT_CODE -eq 124 ]; then
-        echo "⚠️  [TIMEOUT] Attempt $ATTEMPT hit the hard time threshold limit."
+        echo "⚠️  [TIMEOUT] Attempt $ATTEMPT exceeded the ${MAX_MINUTES}m limit."
     else
-        echo "⚠️  [FAILURE] Attempt $ATTEMPT broke with an exit status code: $EXIT_CODE"
+        echo "⚠️  [FAILURE] Attempt $ATTEMPT exited with code $EXIT_CODE."
     fi
 
-    # RECOVERY PHASE: Intelligent Intercept instead of hard wiping
+    # ===========================================================================
+    # RECOVERY PHASE — Three-strategy context management, in priority order.
+    # Goal: next attempt runs on condensed context, not the full failed history.
+    #
+    # Strategy A (primary): Pipe /compact via stdin (no TTY) to invoke Claude
+    #   Code's built-in slash command. Verified by measuring .claude/ size before
+    #   and after — exit 0 alone is insufficient, the file must actually shrink.
+    #
+    # Strategy B+C (combined fallback): Use --continue to ask Claude to write a
+    #   .task_handoff.md checkpoint while it can still see its full history, then
+    #   wipe .claude/ entirely. The handoff file survives in the workspace volume.
+    #   Next attempt starts fresh but gets the checkpoint injected into the prompt.
+    #   This avoids dragging a bloated failed context into the next run.
+    # ===========================================================================
     if [ $ATTEMPT -lt $MAX_RETRIES ]; then
-        echo "🩹 [INTERVENTION] Forcing context compression and error re-evaluation..."
-
-        # Guard rail: Make sure the previous container instance is totally unlinked/killed
         docker kill "$CONTAINER_NAME" 2>/dev/null || true
         sleep 2
 
-        # Invoke a dedicated sub-turn targeting the exact same session file history.
-        # This pipes the built-in '/compact' tool command to compression engines, forcing
-        # Claude to condense the bloat and re-architect its approach BEFORE re-running the prompt.
+        echo "🧹 [RECOVERY] Attempting context compaction (Strategy A)..."
+
+        # Snapshot .claude/ size before the compaction attempt
+        BEFORE_SIZE=0
+        [ -d ".claude" ] && BEFORE_SIZE=$(du -sk ".claude" 2>/dev/null | cut -f1 || echo "0")
+
+        # Strategy A: /compact is a Claude Code slash command that summarises the
+        # conversation history in-place and rewrites .claude/ on the shared volume.
+        # Without -t (no TTY), the CLI reads stdin directly; piping the command in
+        # triggers the same compaction path as typing /compact interactively.
+        # DOCKER_RECOVERY_BASE is used here (not DOCKER_RUN_BASE) since these
+        # are automated passes with no user PTY attached.
         set +e
-        echo "🧹 Sending compaction orders and requesting strategy shift logs..."
-        "${DOCKER_RUN_BASE[@]}" claude --continue --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "/compact The previous attempt failed or timed out. Compress historical logs, drop dead-ends, analyze why the task stalled, and prepare a corrected strategy map for the next run turn."
-        INTERVENTION_CODE=$?
+        printf '/compact\n' | timeout "3m" "${DOCKER_RECOVERY_BASE[@]}" \
+            claude --continue --dangerously-skip-permissions --model "$CHOSEN_MODEL"
+        COMPACT_CODE=$?
         set -e
 
-        if [ $INTERVENTION_CODE -ne 0 ]; then
-            echo "⚠️  [CRITICAL] Context intervention script failed. Falling back to clean slate protocol."
+        # Verify compaction actually shrank the session — exit 0 alone isn't enough.
+        AFTER_SIZE=0
+        [ -d ".claude" ] && AFTER_SIZE=$(du -sk ".claude" 2>/dev/null | cut -f1 || echo "0")
+
+        if [ $COMPACT_CODE -eq 0 ] && [ "${AFTER_SIZE}" -lt "${BEFORE_SIZE}" ]; then
+            echo "✅ Strategy A: session compacted ${BEFORE_SIZE}K → ${AFTER_SIZE}K."
+            echo "   Next attempt resumes via --continue from the condensed session."
+        else
+            echo "⚠️  Strategy A ineffective (${BEFORE_SIZE}K → ${AFTER_SIZE}K, exit ${COMPACT_CODE})."
+            echo "   Running Strategy B+C: handoff capture then context reset..."
+
+            # Strategy B: Run one final --continue pass asking Claude to write a
+            # checkpoint file. The workspace is a mounted volume so the file
+            # survives container teardown even after we wipe .claude/ in step C.
+            # Uses DOCKER_RECOVERY_BASE (no -t) since this is an automated pass.
+            set +e
+            timeout "2m" "${DOCKER_RECOVERY_BASE[@]}" claude --continue \
+                --dangerously-skip-permissions --model "$CHOSEN_MODEL" \
+                -p "Session interrupted. Do NOT continue the main task. Write .task_handoff.md to the workspace root with exactly: (1) bullet list of fully completed steps, (2) what was actively in-progress when interrupted, (3) any files created or modified, (4) the precise next steps needed to finish. Be concise. Stop immediately after writing."
+            HANDOFF_CODE=$?
+            set -e
+
+            # Strategy C: Wipe the bloated failed session. Carrying a full failed
+            # history into the next attempt wastes tokens and biases reasoning.
+            # The handoff file is the only context we want to preserve.
+            echo "🗑️  Resetting session context (handoff file preserved in workspace)..."
             rm -rf .claude/
+            SESSION_STARTED=false   # Next iteration must start fresh, not --continue
+
+            # Inject the handoff into the next attempt's task prompt.
+            # Always wrap ORIGINAL_TASK_PROMPT (not the mutated TASK_PROMPT) so
+            # repeated B+C cycles don't nest "Context from previous session:" blocks.
+            if [ $HANDOFF_CODE -eq 0 ] && [ -f ".task_handoff.md" ]; then
+                HANDOFF_CONTEXT=$(cat ".task_handoff.md")
+                TASK_PROMPT="Context from previous session:
+${HANDOFF_CONTEXT}
+
+Continue the original task: ${ORIGINAL_TASK_PROMPT}"
+                echo "✅ Strategy B+C: handoff captured, session wiped, context injected into next prompt."
+            else
+                echo "⚠️  Handoff write failed (exit ${HANDOFF_CODE}). Starting clean from original task."
+                TASK_PROMPT="$ORIGINAL_TASK_PROMPT"
+            fi
         fi
 
         sleep 3
     fi
 
-    ((ATTEMPT++))
+    ATTEMPT=$((ATTEMPT + 1))
 done
 
 if [ "$SUCCESS" = false ]; then
