@@ -109,7 +109,26 @@ fi
 
 ATTEMPT=1
 SUCCESS=false
-SESSION_STARTED=false   # Flips to true after our first attempt creates a session
+SESSION_STARTED=false
+
+# Extract OAuth tokens from the credentials file and inject them as env vars.
+# CLAUDE_CODE_OAUTH_TOKEN bypasses the first-run auth wizard entirely.
+OAUTH_TOKEN=$(python3 -c "
+import json
+with open('$AUTH_DIR/.credentials.json') as f:
+    print(json.load(f)['claudeAiOauth']['accessToken'])
+" 2>/dev/null)
+OAUTH_REFRESH=$(python3 -c "
+import json
+with open('$AUTH_DIR/.credentials.json') as f:
+    print(json.load(f)['claudeAiOauth']['refreshToken'])
+" 2>/dev/null)
+
+if [ -z "$OAUTH_TOKEN" ]; then
+    echo "❌ Error: Could not read OAuth token from $AUTH_DIR/.credentials.json"
+    echo "   Run 'claude-box-auth' to refresh your credentials."
+    exit 1
+fi   # Flips to true after our first attempt creates a session
 
 # Sanitizes paths, transforms spaces/symbols to dashes, forces lower-case
 # for Docker container naming conformity.
@@ -133,6 +152,8 @@ DOCKER_RUN_BASE=(
   --name "$CONTAINER_NAME"
   -v "$(pwd)":/workspace
   -v "$AUTH_DIR":/home/claudeuser/.claude
+  -e CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN"
+  -e CLAUDE_CODE_OAUTH_REFRESH_TOKEN="$OAUTH_REFRESH"
   -e DISABLE_AUTO_COMPACT=0
   -e CLAUDE_CODE_MAX_CONTEXT_TOKENS="$MAX_CONTEXT_TOKENS"
   -e API_TARGET_INPUT_TOKENS="$TARGET_INPUT_TOKENS"
@@ -148,6 +169,8 @@ DOCKER_RECOVERY_BASE=(
   --name "${CONTAINER_NAME}-recovery"
   -v "$(pwd)":/workspace
   -v "$AUTH_DIR":/home/claudeuser/.claude
+  -e CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN"
+  -e CLAUDE_CODE_OAUTH_REFRESH_TOKEN="$OAUTH_REFRESH"
   -e DISABLE_AUTO_COMPACT=0
   -e CLAUDE_CODE_MAX_CONTEXT_TOKENS="$MAX_CONTEXT_TOKENS"
   -e API_TARGET_INPUT_TOKENS="$TARGET_INPUT_TOKENS"
