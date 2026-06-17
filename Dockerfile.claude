@@ -20,12 +20,18 @@ RUN useradd -m -u 1000 -s /bin/bash claudeuser
 # Find the latest version at: https://www.npmjs.com/package/@anthropic-ai/claude-code
 RUN npm install -g @anthropic-ai/claude-code@latest
 
+# Entrypoint restores ~/.claude.json from the backup inside the mounted
+# credentials volume on every container start (see entrypoint.sh).
+# Must be COPY'd and chmod'd here as root — after USER claudeuser these fail.
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Create the Python venv as claudeuser so it has write access for pip installs.
 USER claudeuser
 RUN python3 -m venv /home/claudeuser/.venv
 ENV PATH="/home/claudeuser/.venv/bin:$PATH"
 
-
 WORKDIR /workspace
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"]
