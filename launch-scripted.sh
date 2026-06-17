@@ -102,22 +102,32 @@ SUCCESS=false
 SANITIZED_DIR=$(basename "$(pwd)" | tr -cs '[:alnum:]-' '-' | tr '[:upper:]' '[:lower:]')
 CONTAINER_NAME="claude-auto-${SANITIZED_DIR:-sandbox}"
 
+# Base Docker Command Blueprint (Fixed continuation backslashes)
+DOCKER_RUN_BASE=(
+  docker run -it --rm \
+  --name "$CONTAINER_NAME" \
+  -v "$(pwd)":/workspace \
+  -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+  -e DISABLE_AUTO_COMPACT=0 \
+  -e CLAUDE_CODE_MAX_CONTEXT_TOKENS="$MAX_CONTEXT_TOKENS" \
+  -e API_TARGET_INPUT_TOKENS="$TARGET_INPUT_TOKENS" \
+  -e MAX_THINKING_TOKENS="$MAX_THINKING_TOKENS" \
+  claude-sandbox
+)
+
 while [ $ATTEMPT -le $MAX_RETRIES ]; do
     echo "🚀 [Attempt $ATTEMPT/$MAX_RETRIES] Launching $CHOSEN_MODEL..."
     echo "⏳ Boundaries -> Context Cap: ${MAX_CONTEXT_TOKENS} | Thinking Cap: ${MAX_THINKING_TOKENS} | Hard Timeout: ${MAX_MINUTES}m"
     
     set +e
-    timeout "${MAX_MINUTES}m" docker run -it --rm \
-      --name "$CONTAINER_NAME" \
-      -v "$(pwd)":/workspace \
-      -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-      -e DISABLE_AUTO_COMPACT=0 \
-      -e CLAUDE_CODE_MAX_CONTEXT_TOKENS="$MAX_CONTEXT_TOKENS" \
-      -e API_TARGET_INPUT_TOKENS="$TARGET_INPUT_TOKENS" \
-      -e MAX_THINKING_TOKENS="$MAX_THINKING_TOKENS" \
-      claude-sandbox \
-      claude --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "$TASK_PROMPT"
-    
+    if [ $ATTEMPT -eq 1 ]; then
+        # Turn 1: Fresh run or standard resumption entry point
+        "${DOCKER_RUN_BASE[@]}" claude --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "$TASK_PROMPT"
+    else
+        # Subsequent Turns: Continue seamlessly from the newly compacted/intervened context
+        echo "📥 Resuming task execution from the newly streamlined context stream..."
+        "${DOCKER_RUN_BASE[@]}" claude --continue --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "$TASK_PROMPT"
+    fi
     EXIT_CODE=$?
     set -e
 
@@ -126,20 +136,34 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
         SUCCESS=true
         break
     elif [ $EXIT_CODE -eq 124 ]; then
-        echo "⚠️  [ALERT] Attempt $ATTEMPT TIMED OUT at the ${MAX_MINUTES} minute mark."
+        echo "⚠️  [TIMEOUT] Attempt $ATTEMPT hit the hard time threshold limit."
     else
-        echo "⚠️  [ALERT] Attempt $ATTEMPT FAILED with system exit code: $EXIT_CODE"
+        echo "⚠️  [FAILURE] Attempt $ATTEMPT broke with an exit status code: $EXIT_CODE"
     fi
 
-    # Recovery Phase: Kill docker run tasks and wipe local context for a blank slate retry
+    # RECOVERY PHASE: Intelligent Intercept instead of hard wiping
     if [ $ATTEMPT -lt $MAX_RETRIES ]; then
-        echo "🔄 Purging context cache folder (.claude/) for retry..."
+        echo "🩹 [INTERVENTION] Forcing context compression and error re-evaluation..."
+
+        # Guard rail: Make sure the previous container instance is totally unlinked/killed
         docker kill "$CONTAINER_NAME" 2>/dev/null || true
-        
-        if [ -d ".claude" ]; then
+        sleep 2
+
+        # Invoke a dedicated sub-turn targeting the exact same session file history.
+        # This pipes the built-in '/compact' tool command to compression engines, forcing
+        # Claude to condense the bloat and re-architect its approach BEFORE re-running the prompt.
+        set +e
+        echo "🧹 Sending compaction orders and requesting strategy shift logs..."
+        "${DOCKER_RUN_BASE[@]}" claude --continue --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "/compact The previous attempt failed or timed out. Compress historical logs, drop dead-ends, analyze why the task stalled, and prepare a corrected strategy map for the next run turn."
+        INTERVENTION_CODE=$?
+        set -e
+
+        if [ $INTERVENTION_CODE -ne 0 ]; then
+            echo "⚠️  [CRITICAL] Context intervention script failed. Falling back to clean slate protocol."
             rm -rf .claude/
         fi
-        sleep 5
+
+        sleep 3
     fi
 
     ((ATTEMPT++))
