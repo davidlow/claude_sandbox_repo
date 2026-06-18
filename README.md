@@ -28,7 +28,11 @@ OAuth tokens are extracted from `~/.claude/.credentials.json` and injected as `C
 | `install.sh` | One-time setup: installs Docker, builds image, registers shell aliases |
 | `setup-auth.sh` | One-time auth bootstrap: copies config and warms up Claude's first-run state |
 | `launch-interactive.sh` | `claude-box` — interactive Claude Code session |
-| `launch-scripted.sh` | `claude-yolo` — autonomous mode with rate-limit auto-recovery |
+| `launch-scripted.sh` | `claude-yolo` — autonomous mode with rate-limit auto-recovery and Gemini audit |
+| `lib/launch-lib.sh` | Pure helper functions sourced by `launch-scripted.sh` and the test suite |
+| `tests/run_tests.sh` | Test runner — `--unit` (no Docker) or `--int` (full integration) |
+| `tests/test_*.sh` | Unit tests for bash functions + integration tests |
+| `tests/fixtures/` | Fake credential JSON files used by unit tests |
 
 ---
 
@@ -84,6 +88,7 @@ Drops you into a full Claude Code session. Claude asks for permission before mak
 cd ~/my-project
 claude-box                        # default model (claude-sonnet-4-6)
 claude-box claude-opus-4-8        # override model
+claude-box claude-fable-5         # Fable model
 ```
 
 ### Autonomous mode — `claude-yolo`
@@ -94,9 +99,53 @@ Give Claude a task and walk away. It runs with `--dangerously-skip-permissions`,
 cd ~/my-project
 claude-yolo "run the test suite and fix any failures"
 claude-yolo "refactor the auth module for readability" claude-opus-4-8
+claude-yolo "add input validation to all API endpoints" claude-haiku-4-5
+claude-yolo "migrate the database schema" --no-gemini
 ```
 
 **Rate limit handling:** if Claude Pro's token quota is exhausted mid-task, `claude-yolo` detects the reset time from the error message, prints a countdown every 5 minutes, then resumes automatically — no intervention needed.
+
+**Recovery strategies:** on timeout or failure, `claude-yolo` tries three escalating strategies before giving up:
+- **Strategy A** — pipes `/compact` to Claude Code to summarise the conversation history in-place, then resumes
+- **Strategy B+C** — asks Claude to write a `.task_handoff.md` checkpoint, wipes the bloated session, then starts fresh with the handoff context injected into the next prompt
+
+**Context bootstrap:** if `CLAUDE.md` is absent from your project root, `claude-yolo` generates it automatically before starting the main task.
+
+---
+
+## Gemini Cross-Model Audit
+
+When a task fails or times out, `claude-yolo` can send the failure context (task objective, `CLAUDE.md`, git diff, last 100 lines of output) to **Gemini 2.5 Flash** for an independent architectural analysis. The advice is saved to `GEMINI_ADVICE.md` and prepended to the next retry prompt.
+
+To enable, export your Google AI Studio key before running:
+
+```bash
+export GEMINI_API_KEY="your-key-here"
+claude-yolo "your task"
+```
+
+To disable for a single run even if the key is set:
+
+```bash
+claude-yolo "your task" --no-gemini
+```
+
+`GEMINI_ADVICE.md` is kept on disk after a final failure for your review, and cleaned up automatically on success.
+
+---
+
+## Model Tiers
+
+`claude-yolo` enforces per-model resource budgets to control costs:
+
+| Model | Timeout | Max retries | Context tokens | Thinking tokens |
+|---|---|---|---|---|
+| `claude-haiku-4-5` | 15 min | 3 | 50 000 | — |
+| `claude-sonnet-4-6` (default) | 10 min | 3 | 80 000 | 10 000 |
+| `claude-opus-4-8` | 5 min | 2 | 120 000 | 24 000 |
+| `claude-fable-5` | 4 min | 2 | 120 000 | — |
+
+Unknown model names fall back to the Sonnet defaults.
 
 ---
 
@@ -119,6 +168,18 @@ Claude Code's native install inside the image supports auto-updates, but since c
 cd ~/claude-sandbox-repo
 docker build -t claude-sandbox -f Dockerfile.claude .
 ```
+
+---
+
+## Running Tests
+
+```bash
+./tests/run_tests.sh            # all tests (unit + integration)
+./tests/run_tests.sh --unit     # unit tests only — no Docker or credentials needed
+./tests/run_tests.sh --int      # integration tests only — requires Docker + credentials
+```
+
+Unit tests cover the pure bash functions in `lib/launch-lib.sh` (argument parsing, model tier selection, rate-limit detection, prompt composition, etc.) and can be run anywhere without any external dependencies.
 
 ---
 
