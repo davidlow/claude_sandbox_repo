@@ -1,0 +1,26 @@
+# Mock claude-sandbox image for pipeline orchestration tests.
+# Replaces the real Claude binary with a lightweight shell script that writes
+# expected fixture files based on prompt content, so tests can verify pipeline
+# orchestration logic (phase ordering, retries, decision logs) without network
+# access or real Claude tokens.
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y bash coreutils grep \
+    && rm -rf /var/lib/apt/lists/*
+
+# Mirror the real image's user setup so run_headless_phase mounts work correctly.
+RUN useradd -m -u 1000 -s /bin/bash claudeuser
+
+COPY mock-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+COPY mock-claude.sh /usr/local/bin/claude
+RUN chmod +x /usr/local/bin/claude
+
+RUN mkdir -p /workspace /home/claudeuser/.claude
+
+USER claudeuser
+WORKDIR /workspace
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["bash"]

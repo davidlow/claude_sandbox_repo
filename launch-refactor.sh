@@ -236,7 +236,7 @@ IMPL_PROMPT="Read docs/approved_fix.md. Apply the exact implementation plan desc
 IMPL_ARGS=("$IMPL_PROMPT" "$CHOSEN_MODEL")
 [ "$GEMINI_ENABLED" = "false" ] && IMPL_ARGS+=("--no-gemini")
 
-"$(dirname "$0")/launch-scripted.sh" "${IMPL_ARGS[@]}"
+"${LAUNCH_SCRIPTED_OVERRIDE:-$(dirname "$0")/launch-scripted.sh}" "${IMPL_ARGS[@]}"
 PHASE3_EXIT=$?
 if [ $PHASE3_EXIT -eq 0 ]; then
     decision_log_outcome "$DECISION_FILE" "success" "Phase 3 implementation completed successfully."

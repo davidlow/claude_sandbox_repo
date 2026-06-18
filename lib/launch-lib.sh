@@ -132,7 +132,7 @@ run_headless_phase() {
             -e CLAUDE_CODE_MAX_CONTEXT_TOKENS="$MAX_CONTEXT_TOKENS" \
             -e API_TARGET_INPUT_TOKENS="$TARGET_INPUT_TOKENS" \
             -e MAX_THINKING_TOKENS="$MAX_THINKING_TOKENS" \
-            claude-sandbox \
+            "${CLAUDE_SANDBOX_IMAGE:-claude-sandbox}" \
             claude --dangerously-skip-permissions --model "$model" -p "$prompt"
     ) || exit_code=$?
 
@@ -153,7 +153,7 @@ call_gemini() {
 
     local response
     response=$(GEMINI_PROMPT_FILE="$prompt_file" python3 - <<'PYEOF' 2>/dev/null
-import json, os, sys, urllib.request
+import json, os, sys, time, urllib.request, urllib.error
 
 api_key = os.environ.get('GEMINI_API_KEY', '')
 prompt_file = os.environ.get('GEMINI_PROMPT_FILE', '')
@@ -178,12 +178,21 @@ url = (
 req = urllib.request.Request(
     url, data=payload, headers={'Content-Type': 'application/json'}
 )
-try:
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read())
-    print(data['candidates'][0]['content']['parts'][0]['text'])
-except Exception:
-    sys.exit(1)
+
+# Retry up to 3 times with exponential back-off on rate-limit (HTTP 429).
+for attempt in range(3):
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read())
+        print(data['candidates'][0]['content']['parts'][0]['text'])
+        sys.exit(0)
+    except urllib.error.HTTPError as e:
+        if e.code == 429 and attempt < 2:
+            time.sleep(12 * (attempt + 1))  # 12 s, then 24 s
+            continue
+        sys.exit(1)
+    except Exception:
+        sys.exit(1)
 PYEOF
     )
 
@@ -321,5 +330,5 @@ decision_log_outcome() {
     [ ! -f "$file" ] && return 0
     sed -i "s/^\*\*Status:\*\* in-progress/**Status:** ${status}/" "$file"
     printf '\n## Outcome\n\n**Status:** %s\n' "$status" >> "$file"
-    [ -n "$notes" ] && printf '\n%s\n' "$notes" >> "$file"
+    if [ -n "$notes" ]; then printf '\n%s\n' "$notes" >> "$file"; fi
 }

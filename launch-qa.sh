@@ -91,7 +91,7 @@ PHASE1_PROMPT="Write a comprehensive test suite for: ${ORIGINAL_TASK_PROMPT}. Co
 PHASE1_ARGS=("$PHASE1_PROMPT" "$CHOSEN_MODEL")
 [ "$GEMINI_ENABLED" = "false" ] && PHASE1_ARGS+=("--no-gemini")
 
-"$SCRIPT_DIR/launch-scripted.sh" "${PHASE1_ARGS[@]}"
+"${LAUNCH_SCRIPTED_OVERRIDE:-$SCRIPT_DIR/launch-scripted.sh}" "${PHASE1_ARGS[@]}"
 PHASE1_EXIT=$?
 
 if [ $PHASE1_EXIT -ne 0 ]; then
@@ -176,7 +176,7 @@ PHASE2_PROMPT="Read tests/gemini_missing_coverage.md. It contains a numbered lis
 PHASE2_ARGS=("$PHASE2_PROMPT" "$CHOSEN_MODEL")
 # Always allow Gemini in Phase 2 for its own failure recovery — the key is set.
 
-"$SCRIPT_DIR/launch-scripted.sh" "${PHASE2_ARGS[@]}"
+"${LAUNCH_SCRIPTED_OVERRIDE:-$SCRIPT_DIR/launch-scripted.sh}" "${PHASE2_ARGS[@]}"
 PHASE2_EXIT=$?
 
 if [ $PHASE2_EXIT -ne 0 ]; then

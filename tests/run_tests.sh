@@ -2,14 +2,22 @@
 # Main test runner for the claude-sandbox test suite.
 #
 # Usage:
-#   ./tests/run_tests.sh           # run all tests (unit + integration)
-#   ./tests/run_tests.sh --unit    # run unit tests only (no Docker/credentials needed)
-#   ./tests/run_tests.sh --int     # run integration tests only
+#   ./tests/run_tests.sh                  # run all tests except E2E
+#   ./tests/run_tests.sh --unit           # unit tests only (no Docker/credentials/network)
+#   ./tests/run_tests.sh --int            # legacy integration tests (Docker + credentials)
+#   ./tests/run_tests.sh --security       # Docker sandbox security checks
+#   ./tests/run_tests.sh --gemini         # Gemini API integration tests (needs GEMINI_API_KEY)
+#   ./tests/run_tests.sh --orchestration  # pipeline orchestration with mock Docker image
+#   ./tests/run_tests.sh --e2e            # full end-to-end (Docker + credentials, slow)
 set -eo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MODE="${1:-all}"
+
+# ---------------------------------------------------------------------------
+# Test file lists by category
+# ---------------------------------------------------------------------------
 
 UNIT_TESTS=(
     test_strip_ansi.sh
@@ -21,11 +29,33 @@ UNIT_TESTS=(
     test_credentials.sh
     test_interactive_script.sh
     test_pipelines.sh
+    test_unit_lib_extended.sh
 )
 
+# Legacy integration tests (Docker + credentials, run the actual Claude binary)
 INTEGRATION_TESTS=(
     test_container_basics.sh
     test_claude_tasks.sh
+)
+
+# Docker sandbox security isolation tests (Docker only, no credentials needed)
+SECURITY_TESTS=(
+    test_sandbox_security.sh
+)
+
+# Gemini API tests (network only, no Docker)
+GEMINI_TESTS=(
+    test_gemini.sh
+)
+
+# Pipeline orchestration tests (Docker + mock image, no real credentials needed)
+ORCHESTRATION_TESTS=(
+    test_orchestration.sh
+)
+
+# Full end-to-end tests (Docker + real credentials, slow — excluded from --all)
+E2E_TESTS=(
+    test_e2e.sh
 )
 
 echo "╔══════════════════════════════════════════════╗"
@@ -60,17 +90,36 @@ run_file() {
 
 case "$MODE" in
     --unit)
-        echo "Mode: unit tests only"
+        echo "Mode: unit tests only (no external dependencies)"
         for t in "${UNIT_TESTS[@]}"; do run_file "$t"; done
         ;;
     --int)
-        echo "Mode: integration tests only"
+        echo "Mode: integration tests (Docker + credentials required)"
         for t in "${INTEGRATION_TESTS[@]}"; do run_file "$t"; done
         ;;
+    --security)
+        echo "Mode: sandbox security tests (Docker required)"
+        for t in "${SECURITY_TESTS[@]}"; do run_file "$t"; done
+        ;;
+    --gemini)
+        echo "Mode: Gemini API integration tests (GEMINI_API_KEY required)"
+        for t in "${GEMINI_TESTS[@]}"; do run_file "$t"; done
+        ;;
+    --orchestration)
+        echo "Mode: pipeline orchestration tests (Docker required, builds mock image)"
+        for t in "${ORCHESTRATION_TESTS[@]}"; do run_file "$t"; done
+        ;;
+    --e2e)
+        echo "Mode: full end-to-end tests (Docker + credentials required, SLOW)"
+        for t in "${E2E_TESTS[@]}"; do run_file "$t"; done
+        ;;
     *)
-        echo "Mode: all tests"
+        echo "Mode: all tests except E2E (unit + integration + security + gemini + orchestration)"
         for t in "${UNIT_TESTS[@]}";        do run_file "$t"; done
         for t in "${INTEGRATION_TESTS[@]}"; do run_file "$t"; done
+        for t in "${SECURITY_TESTS[@]}";    do run_file "$t"; done
+        for t in "${GEMINI_TESTS[@]}";      do run_file "$t"; done
+        for t in "${ORCHESTRATION_TESTS[@]}"; do run_file "$t"; done
         ;;
 esac
 
