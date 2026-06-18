@@ -113,6 +113,48 @@ claude-yolo "migrate the database schema" --no-gemini
 
 ---
 
+## Multi-Stage Pipelines
+
+Three higher-level commands that physically separate brainstorming, evaluation, and implementation into isolated containers. The `.claude/` session directory is wiped between phases so each model starts with a fresh context — preventing the "cognitive anchoring" where an LLM fixates on its first idea.
+
+| Command | When to use | Phases |
+|---|---|---|
+| `claude-architect` | New features, greenfield design | Haiku brainstorms 3 approaches → Gemini critique → Sonnet picks one → Sonnet implements |
+| `claude-qa` | Building or hardening a test suite | Sonnet writes + fixes tests → Gemini adversarial audit → Sonnet adds missing coverage |
+| `claude-refactor` | Bug fixes, reducing technical debt | Haiku diagnoses + proposes 3 options → Sonnet picks one → Sonnet implements + verifies |
+
+### `claude-architect`
+
+```bash
+claude-architect "add a plugin system to the CLI"
+claude-architect "design a caching layer for the database" claude-opus-4-8
+claude-architect "redesign the auth module" --no-gemini
+```
+
+Writes intermediate artifacts to `docs/` for review: `architecture_candidates.md` (three approaches), `gemini_architectural_audit.md` (Gemini critique, if enabled), and `approved_architecture.md` (the chosen spec).
+
+### `claude-qa`
+
+```bash
+claude-qa "write tests for the payments module"
+claude-qa "add integration tests for the REST API" claude-opus-4-8
+claude-qa "test the file upload handler" --no-gemini
+```
+
+With `GEMINI_API_KEY` set, Gemini acts as an adversarial Red Team reviewer after Phase 1: it scans the codebase and test files to find edge cases, boundary conditions, and race conditions that the initial suite misses. Findings are saved to `tests/gemini_missing_coverage.md` and Phase 2 implements them all.
+
+### `claude-refactor`
+
+```bash
+claude-refactor "fix the race condition in the job queue"
+claude-refactor "reduce coupling in the user service" claude-opus-4-8
+claude-refactor "the payment processor fails on retry" --no-gemini
+```
+
+Intermediate artifacts in `docs/`: `refactor_candidates.md` (three options: minimal patch, structural fix, module rewrite) and `approved_fix.md` (chosen plan). In Phase 3, Gemini acts as a circuit-breaker on failure — if Claude's implementation attempt fails, Gemini diagnoses the logical flaw before each retry.
+
+---
+
 ## Gemini Cross-Model Audit
 
 When a task fails or times out, `claude-yolo` can send the failure context (task objective, `CLAUDE.md`, git diff, last 100 lines of output) to **Gemini 2.5 Flash** for an independent architectural analysis. The advice is saved to `GEMINI_ADVICE.md` and prepended to the next retry prompt.

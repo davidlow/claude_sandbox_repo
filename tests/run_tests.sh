@@ -20,6 +20,7 @@ UNIT_TESTS=(
     test_wait_for_quota.sh
     test_credentials.sh
     test_interactive_script.sh
+    test_pipelines.sh
 )
 
 INTEGRATION_TESTS=(
