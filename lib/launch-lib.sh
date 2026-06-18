@@ -173,7 +173,7 @@ payload = json.dumps({
 
 url = (
     'https://generativelanguage.googleapis.com/v1beta/models/'
-    'gemini-2.5-flash:generateContent?key=' + api_key
+    'gemini-2.5-flash-lite:generateContent?key=' + api_key
 )
 req = urllib.request.Request(
     url, data=payload, headers={'Content-Type': 'application/json'}
