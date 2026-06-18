@@ -61,13 +61,14 @@ Summary: call functions directly
 Summary: dynamic loading
 EOF
 
-OUTPUT=$(build_gemini_architectural_prompt "$CAND_FILE")
+OUTPUT=$(build_gemini_architectural_prompt "add a plugin system to the CLI" "$CAND_FILE")
 
 assert_contains "arch prompt: contains adversarial framing" "adversarial" "$OUTPUT"
 assert_contains "arch prompt: contains Principal Engineer" "Principal Engineer" "$OUTPUT"
 assert_contains "arch prompt: contains maintainability" "maintainability" "$OUTPUT"
 assert_contains "arch prompt: embeds candidates content" "Option A" "$OUTPUT"
 assert_contains "arch prompt: does not select a winner" "Do NOT select a winner" "$OUTPUT"
+assert_contains "arch prompt: contains task description" "add a plugin system to the CLI" "$OUTPUT"
 
 rm -f "$CAND_FILE"
 
@@ -75,7 +76,7 @@ rm -f "$CAND_FILE"
 suite "build_gemini_architectural_prompt — missing file"
 # ==============================================================================
 
-OUTPUT_MISSING=$(build_gemini_architectural_prompt "/nonexistent/file_$$_candidates.md")
+OUTPUT_MISSING=$(build_gemini_architectural_prompt "some task" "/nonexistent/file_$$_candidates.md")
 assert_contains "arch prompt: handles missing file gracefully" "candidates file not found" "$OUTPUT_MISSING"
 
 # ==============================================================================
@@ -91,13 +92,14 @@ def login(user, pwd): pass
 def test_login(): pass
 PAYEOF
 
-QA_OUTPUT=$(build_gemini_qa_prompt "$PAYLOAD_FILE")
+QA_OUTPUT=$(build_gemini_qa_prompt "write tests for the auth module" "$PAYLOAD_FILE")
 
 assert_contains "qa prompt: contains adversarial framing" "adversarial" "$QA_OUTPUT"
 assert_contains "qa prompt: mentions Red Team" "Red Team" "$QA_OUTPUT"
 assert_contains "qa prompt: asks for numbered list" "numbered list" "$QA_OUTPUT"
 assert_contains "qa prompt: mentions production" "production" "$QA_OUTPUT"
 assert_contains "qa prompt: embeds payload content" "auth.py" "$QA_OUTPUT"
+assert_contains "qa prompt: contains task description" "write tests for the auth module" "$QA_OUTPUT"
 
 rm -f "$PAYLOAD_FILE"
 
@@ -105,7 +107,7 @@ rm -f "$PAYLOAD_FILE"
 suite "build_gemini_qa_prompt — missing file"
 # ==============================================================================
 
-QA_MISSING=$(build_gemini_qa_prompt "/nonexistent/payload_$$.txt")
+QA_MISSING=$(build_gemini_qa_prompt "some task" "/nonexistent/payload_$$.txt")
 assert_contains "qa prompt: handles missing file gracefully" "payload file not found" "$QA_MISSING"
 
 # ==============================================================================
@@ -116,13 +118,14 @@ CTX_FILE=$(mktemp)
 trap 'rm -f "$CTX_FILE"' RETURN
 printf 'Task: fix the queue\nError: NullPointerException at line 42\ndiff --git a/queue.py\n' > "$CTX_FILE"
 
-RF_OUTPUT=$(build_gemini_refactor_prompt "$CTX_FILE")
+RF_OUTPUT=$(build_gemini_refactor_prompt "fix the queue" "$CTX_FILE")
 
 assert_contains "refactor prompt: mentions autonomous agent" "autonomous" "$RF_OUTPUT"
 assert_contains "refactor prompt: asks for diagnosis" "Diagnose" "$RF_OUTPUT"
 assert_contains "refactor prompt: asks what went wrong" "what it got wrong" "$RF_OUTPUT"
 assert_contains "refactor prompt: embeds context content" "NullPointerException" "$RF_OUTPUT"
 assert_contains "refactor prompt: is actionable" "actionable" "$RF_OUTPUT"
+assert_contains "refactor prompt: contains task description" "fix the queue" "$RF_OUTPUT"
 
 rm -f "$CTX_FILE"
 
@@ -130,7 +133,7 @@ rm -f "$CTX_FILE"
 suite "build_gemini_refactor_prompt — missing file"
 # ==============================================================================
 
-RF_MISSING=$(build_gemini_refactor_prompt "/nonexistent/context_$$.txt")
+RF_MISSING=$(build_gemini_refactor_prompt "some task" "/nonexistent/context_$$.txt")
 assert_contains "refactor prompt: handles missing file gracefully" "context file not found" "$RF_MISSING"
 
 # ==============================================================================

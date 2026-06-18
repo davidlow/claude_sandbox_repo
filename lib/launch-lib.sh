@@ -168,7 +168,7 @@ except OSError:
 
 payload = json.dumps({
     'contents': [{'parts': [{'text': prompt}]}],
-    'generationConfig': {'maxOutputTokens': 2048, 'temperature': 0.3}
+    'generationConfig': {'maxOutputTokens': 8192, 'temperature': 0.3}
 }).encode()
 
 url = (
@@ -195,37 +195,66 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# build_gemini_architectural_prompt <candidates_file>
+# build_gemini_architectural_prompt <task> <candidates_file>
 # Prints a Gemini prompt for critiquing architectural design candidates.
-# Redirect stdout to a temp file and pass that to call_gemini.
+# Includes project context (CLAUDE.md if present) and the task objective so
+# Gemini can evaluate fit with the existing codebase, not just the candidates
+# in isolation. Redirect stdout to a temp file and pass that to call_gemini.
 # ---------------------------------------------------------------------------
 build_gemini_architectural_prompt() {
-    local candidates_file="$1"
-    printf '%s\n\n%s\n' \
-        "You are a Principal Engineer performing an architectural review. Read the proposed designs below. For EACH option, provide a concise critique covering: (1) maintainability risks, (2) scaling bottlenecks, (3) security concerns, (4) hidden complexity. Do NOT select a winner — only critique each option individually. Be direct, specific, and adversarial." \
-        "$(cat "$candidates_file" 2>/dev/null || echo '(candidates file not found)')"
+    local task="$1"
+    local candidates_file="$2"
+    if [ -f "CLAUDE.md" ]; then
+        printf '=== PROJECT CONTEXT (CLAUDE.md) ===\n'
+        cat "CLAUDE.md"
+        printf '\n\n'
+    fi
+    printf '=== TASK OBJECTIVE ===\n%s\n\n' "${task:-"(no task specified)"}"
+    printf '%s\n\n' \
+        "You are a Principal Engineer performing an adversarial architectural review. Read the proposed designs below. For EACH option, provide a concise critique covering: (1) maintainability risks, (2) scaling bottlenecks, (3) security concerns, (4) hidden complexity. Do NOT select a winner — only critique each option individually. Be direct, specific, and adversarial."
+    printf '=== ARCHITECTURAL CANDIDATES ===\n'
+    cat "$candidates_file" 2>/dev/null || printf '(candidates file not found)\n'
 }
 
 # ---------------------------------------------------------------------------
-# build_gemini_qa_prompt <payload_file>
+# build_gemini_qa_prompt <task> <payload_file>
 # Prints a Gemini prompt for adversarial QA coverage analysis.
+# Includes the testing scope and project context (CLAUDE.md if present) so
+# Gemini knows what framework/conventions apply and what's in scope.
 # Redirect stdout to a temp file and pass that to call_gemini.
 # ---------------------------------------------------------------------------
 build_gemini_qa_prompt() {
-    local payload_file="$1"
-    printf '%s\n\n%s\n' \
-        "You are an adversarial Red Team QA engineer reviewing a codebase and its test suite. Identify edge cases, boundary conditions, race conditions, type-coercion bugs, null/undefined handling failures, and error paths that the current tests FAIL to cover. Output a numbered list of concrete, implementable missing test requirements. Assume this code will be deployed to production — be ruthlessly thorough." \
-        "$(cat "$payload_file" 2>/dev/null || echo '(payload file not found)')"
+    local task="$1"
+    local payload_file="$2"
+    printf '=== TESTING SCOPE ===\n%s\n\n' "${task:-"(no task specified)"}"
+    if [ -f "CLAUDE.md" ]; then
+        printf '=== PROJECT CONTEXT (CLAUDE.md) ===\n'
+        cat "CLAUDE.md"
+        printf '\n\n'
+    fi
+    printf '%s\n\n' \
+        "You are an adversarial Red Team QA engineer reviewing a codebase and its test suite. Identify edge cases, boundary conditions, race conditions, type-coercion bugs, null/undefined handling failures, and error paths that the current tests FAIL to cover. Output a numbered list of concrete, implementable missing test requirements. Assume this code will be deployed to production — be ruthlessly thorough."
+    printf '=== SOURCE AND TEST FILES ===\n'
+    cat "$payload_file" 2>/dev/null || printf '(payload file not found)\n'
 }
 
 # ---------------------------------------------------------------------------
-# build_gemini_refactor_prompt <context_file>
+# build_gemini_refactor_prompt <task> <context_file>
 # Prints a Gemini prompt for diagnosing a failed refactoring attempt.
+# Includes the task objective and project context (CLAUDE.md if present).
 # Redirect stdout to a temp file and pass that to call_gemini.
 # ---------------------------------------------------------------------------
 build_gemini_refactor_prompt() {
-    local context_file="$1"
-    printf '%s\n\n%s\n' \
-        "An autonomous coding agent attempted a refactoring task and failed. Review the context below (original task, stack trace or test failures, and the agent's git diff). Diagnose the fundamental logical flaw in the agent's approach. Explain specifically: (1) what it got wrong, (2) what assumption was incorrect, (3) what the next attempt must do differently. Be concise and directly actionable." \
-        "$(cat "$context_file" 2>/dev/null || echo '(context file not found)')"
+    local task="$1"
+    local context_file="$2"
+    printf '=== TASK OBJECTIVE ===\n%s\n\n' "${task:-"(no task specified)"}"
+    if [ -f "CLAUDE.md" ]; then
+        printf '=== PROJECT CONTEXT (CLAUDE.md) ===\n'
+        cat "CLAUDE.md"
+        printf '\n\n'
+    fi
+    printf '%s\n\n' \
+        "An autonomous coding agent attempted a refactoring task and failed. Review the context below (original task, stack trace or test failures, and the agent's git diff). Diagnose the fundamental logical flaw in the agent's approach. Explain specifically: (1) what it got wrong, (2) what assumption was incorrect, (3) what the next attempt must do differently. Be concise and directly actionable."
+    printf '=== FAILURE CONTEXT ===\n'
+    cat "$context_file" 2>/dev/null || printf '(context file not found)\n'
 }

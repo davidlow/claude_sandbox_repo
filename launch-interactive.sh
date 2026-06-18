@@ -1,5 +1,7 @@
 #!/bin/bash
 
+[ -f "$(dirname "${BASH_SOURCE[0]}")/.env.local" ] && source "$(dirname "${BASH_SOURCE[0]}")/.env.local"
+
 # ==============================================================================
 # claude-box — Interactive Claude Code Sandbox
 #

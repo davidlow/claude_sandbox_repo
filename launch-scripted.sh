@@ -4,6 +4,8 @@ set -eo pipefail
 # integration installs hooks that reference $ZSH_VERSION, which is unset in
 # bash. With -u active, those hooks error-out and break docker tee pipelines.
 
+[ -f "$(dirname "${BASH_SOURCE[0]}")/.env.local" ] && source "$(dirname "${BASH_SOURCE[0]}")/.env.local"
+
 # ==============================================================================
 # claude-yolo — Context-Aware, Cross-Model Adaptive Autonomous Sandbox Runner
 #
@@ -229,7 +231,7 @@ run_gemini_audit() {
         if git rev-parse --git-dir >/dev/null 2>&1; then
             git diff HEAD --stat 2>/dev/null || true
             echo "---"
-            git diff HEAD 2>/dev/null | head -200 || true
+            git diff HEAD 2>/dev/null | head -500 || true
         else
             echo "(not a git repository)"
         fi
@@ -270,7 +272,7 @@ prompt = (
 
 payload = json.dumps({
     'contents': [{'parts': [{'text': prompt}]}],
-    'generationConfig': {'maxOutputTokens': 1024, 'temperature': 0.3}
+    'generationConfig': {'maxOutputTokens': 4096, 'temperature': 0.3}
 }).encode()
 
 url = (

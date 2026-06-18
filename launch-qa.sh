@@ -4,6 +4,8 @@ set -eo pipefail
 # integration installs hooks that reference $ZSH_VERSION, which is unset in
 # bash. With -u active, those hooks error-out and break docker tee pipelines.
 
+[ -f "$(dirname "${BASH_SOURCE[0]}")/.env.local" ] && source "$(dirname "${BASH_SOURCE[0]}")/.env.local"
+
 # ==============================================================================
 # claude-qa — Adversarial Test Generation Pipeline
 #
@@ -100,29 +102,36 @@ fi
 echo "🕵️  Gemini adversarial audit: scanning for missing coverage..."
 
 # Bundle source and test files (skip generated/dependency directories).
+# 500KB cap — well under Gemini's ~4MB practical limit but bounded for cost control.
+FILE_LIST=$(find . -type f \( \
+    -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.tsx" -o \
+    -name "*.go" -o -name "*.rs" -o -name "*.java" -o -name "*.rb" -o \
+    -name "*.sh" -o -name "*.bash" -o -name "*.c" -o -name "*.cpp" \
+\) \
+-not -path "*/node_modules/*" \
+-not -path "*/.git/*" \
+-not -path "*/__pycache__/*" \
+-not -path "*/dist/*" \
+-not -path "*/build/*" \
+-not -path "*/vendor/*" \
+-not -path "*/.venv/*" \
+2>/dev/null | sort)
+
+FILE_COUNT=$(printf '%s\n' "$FILE_LIST" | grep -c . 2>/dev/null || echo "0")
+
 {
-    echo "=== SOURCE AND TEST FILES ==="
-    find . -type f \( \
-        -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.tsx" -o \
-        -name "*.go" -o -name "*.rs" -o -name "*.java" -o -name "*.rb" -o \
-        -name "*.sh" -o -name "*.bash" -o -name "*.c" -o -name "*.cpp" \
-    \) \
-    -not -path "*/node_modules/*" \
-    -not -path "*/.git/*" \
-    -not -path "*/__pycache__/*" \
-    -not -path "*/dist/*" \
-    -not -path "*/build/*" \
-    -not -path "*/vendor/*" \
-    -not -path "*/.venv/*" \
-    2>/dev/null \
-    | sort \
-    | while IFS= read -r f; do
-        echo ""; echo "--- $f ---"
+    printf '%s\n' "$FILE_LIST" | while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        printf '\n--- %s ---\n' "$f"
         cat "$f" 2>/dev/null || true
     done
-} | head -c 100000 > "$QA_PAYLOAD_FILE"
+} | head -c 500000 > "$QA_PAYLOAD_FILE"
 
-build_gemini_qa_prompt "$QA_PAYLOAD_FILE" > "$GEMINI_PROMPT_FILE"
+PAYLOAD_BYTES=$(wc -c < "$QA_PAYLOAD_FILE" 2>/dev/null || echo "0")
+echo "   Bundled $FILE_COUNT source/test files ($(( PAYLOAD_BYTES / 1024 ))KB payload)"
+[ "$PAYLOAD_BYTES" -ge 499990 ] && echo "   ⚠️  Payload hit 500KB cap — some files may be truncated"
+
+build_gemini_qa_prompt "$ORIGINAL_TASK_PROMPT" "$QA_PAYLOAD_FILE" > "$GEMINI_PROMPT_FILE"
 
 mkdir -p tests
 if call_gemini "$GEMINI_PROMPT_FILE" "tests/gemini_missing_coverage.md"; then

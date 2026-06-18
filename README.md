@@ -33,6 +33,7 @@ OAuth tokens are extracted from `~/.claude/.credentials.json` and injected as `C
 | `tests/run_tests.sh` | Test runner — `--unit` (no Docker) or `--int` (full integration) |
 | `tests/test_*.sh` | Unit tests for bash functions + integration tests |
 | `tests/fixtures/` | Fake credential JSON files used by unit tests |
+| `.env.local.example` | Template for local API keys (copy to `.env.local`, which is gitignored) |
 
 ---
 
@@ -159,7 +160,18 @@ Intermediate artifacts in `docs/`: `refactor_candidates.md` (three options: mini
 
 When a task fails or times out, `claude-yolo` can send the failure context (task objective, `CLAUDE.md`, git diff, last 100 lines of output) to **Gemini 2.5 Flash** for an independent architectural analysis. The advice is saved to `GEMINI_ADVICE.md` and prepended to the next retry prompt.
 
-To enable, export your Google AI Studio key before running:
+### Setting up your Gemini API key (recommended)
+
+Copy the example file and add your key:
+
+```bash
+cp .env.local.example .env.local
+# then edit .env.local and replace "your-key-here" with your actual key
+```
+
+`.env.local` is gitignored and sourced automatically by every launch script — no manual `export` needed. Get a free key at [Google AI Studio](https://aistudio.google.com/apikey).
+
+Alternatively, export the key in your shell session directly:
 
 ```bash
 export GEMINI_API_KEY="your-key-here"

@@ -4,6 +4,8 @@ set -eo pipefail
 # integration installs hooks that reference $ZSH_VERSION, which is unset in
 # bash. With -u active, those hooks error-out and break docker tee pipelines.
 
+[ -f "$(dirname "${BASH_SOURCE[0]}")/.env.local" ] && source "$(dirname "${BASH_SOURCE[0]}")/.env.local"
+
 # ==============================================================================
 # claude-architect — Multi-Stage Architectural Design & Implementation Pipeline
 #
@@ -152,7 +154,7 @@ echo ""
 # ==============================================================================
 if [ "$GEMINI_ENABLED" = true ] && [ -f "docs/architecture_candidates.md" ]; then
     echo "🔍 Gemini architectural critique..."
-    build_gemini_architectural_prompt "docs/architecture_candidates.md" > "$GEMINI_PROMPT_FILE"
+    build_gemini_architectural_prompt "$ORIGINAL_TASK_PROMPT" "docs/architecture_candidates.md" > "$GEMINI_PROMPT_FILE"
     if call_gemini "$GEMINI_PROMPT_FILE" "docs/gemini_architectural_audit.md"; then
         echo "✅ Gemini critique saved to docs/gemini_architectural_audit.md"
     else
