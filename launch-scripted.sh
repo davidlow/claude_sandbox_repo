@@ -43,12 +43,10 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     exit 0
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AUTH_DIR="$SCRIPT_DIR/claude-auth"
-
-if [ ! -d "$AUTH_DIR" ] || [ -z "$(ls -A "$AUTH_DIR" 2>/dev/null)" ]; then
-    echo "❌ Error: No Claude credentials found in $AUTH_DIR"
-    echo "   Run 'claude-box-auth' first to log in with your Claude Pro account."
+CREDS="$HOME/.claude/.credentials.json"
+if [ ! -f "$CREDS" ]; then
+    echo "❌ Error: No Claude credentials found at $CREDS"
+    echo "   Log in with: claude auth login --claudeai"
     exit 1
 fi
 
@@ -111,16 +109,15 @@ ATTEMPT=1
 SUCCESS=false
 SESSION_STARTED=false
 
-# Extract OAuth tokens from the credentials file and inject them as env vars.
-# CLAUDE_CODE_OAUTH_TOKEN bypasses the first-run auth wizard entirely.
+# Inject OAuth tokens so Claude Code authenticates without interactive prompts.
 OAUTH_TOKEN=$(python3 -c "
 import json
-with open('$AUTH_DIR/.credentials.json') as f:
+with open('$CREDS') as f:
     print(json.load(f)['claudeAiOauth']['accessToken'])
 " 2>/dev/null)
 OAUTH_REFRESH=$(python3 -c "
 import json
-with open('$AUTH_DIR/.credentials.json') as f:
+with open('$CREDS') as f:
     print(json.load(f)['claudeAiOauth']['refreshToken'])
 " 2>/dev/null)
 
@@ -151,7 +148,7 @@ DOCKER_RUN_BASE=(
   docker run -it --rm
   --name "$CONTAINER_NAME"
   -v "$(pwd)":/workspace
-  -v "$AUTH_DIR":/home/claudeuser/.claude
+  -v "$HOME/.claude":/home/claudeuser/.claude
   -e CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN"
   -e CLAUDE_CODE_OAUTH_REFRESH_TOKEN="$OAUTH_REFRESH"
   -e DISABLE_AUTO_COMPACT=0
@@ -168,7 +165,7 @@ DOCKER_RECOVERY_BASE=(
   docker run -i --rm
   --name "${CONTAINER_NAME}-recovery"
   -v "$(pwd)":/workspace
-  -v "$AUTH_DIR":/home/claudeuser/.claude
+  -v "$HOME/.claude":/home/claudeuser/.claude
   -e CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN"
   -e CLAUDE_CODE_OAUTH_REFRESH_TOKEN="$OAUTH_REFRESH"
   -e DISABLE_AUTO_COMPACT=0
