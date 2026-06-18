@@ -52,19 +52,15 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     exit 0
 fi
 
+# Load pure helper functions (also sourced by the test suite).
+source "$(dirname "$0")/lib/launch-lib.sh"
+
 # ==============================================================================
 # ARGUMENT PARSING
-# Extract --no-gemini from anywhere in the argument list; remaining args are
-# treated positionally (task prompt, then optional model).
+# parse_args extracts --no-gemini and sets GEMINI_ENABLED, POSITIONAL_ARGS,
+# ORIGINAL_TASK_PROMPT, and CHOSEN_MODEL.
 # ==============================================================================
-GEMINI_ENABLED=true
-POSITIONAL_ARGS=()
-for arg in "$@"; do
-    case "$arg" in
-        --no-gemini) GEMINI_ENABLED=false ;;
-        *) POSITIONAL_ARGS+=("$arg") ;;
-    esac
-done
+parse_args "$@"
 
 CREDS="$HOME/.claude/.credentials.json"
 if [ ! -f "$CREDS" ]; then
@@ -73,15 +69,12 @@ if [ ! -f "$CREDS" ]; then
     exit 1
 fi
 
-if [ -z "${POSITIONAL_ARGS[0]:-}" ]; then
+if [ -z "${ORIGINAL_TASK_PROMPT:-}" ]; then
     echo "❌ Error: You must provide an instruction string."
     echo "Usage: claude-yolo \"your task\" [optional_model] [--no-gemini]"
     echo "       claude-yolo --help"
     exit 1
 fi
-
-ORIGINAL_TASK_PROMPT="${POSITIONAL_ARGS[0]}"
-CHOSEN_MODEL="${POSITIONAL_ARGS[1]:-claude-sonnet-4-6}"
 
 # Gemini audit requires an API key; silently disable if absent so the script
 # works identically for users who haven't configured one.
@@ -89,41 +82,10 @@ CHOSEN_MODEL="${POSITIONAL_ARGS[1]:-claude-sonnet-4-6}"
 
 # ==============================================================================
 # DYNAMIC SAFE-FENCE ENGINE (High-Capability / Cost-Protected)
-# Balances the deep context needs of elite models with aggressive host timeouts.
-#
-# MAX_CONTEXT_TOKENS  — Memory cap before auto-compaction trigger.
-# TARGET_INPUT_TOKENS — Soft target for tokens sent per API call (~50% of max).
-# MAX_THINKING_TOKENS — Reasoning token allocation. 0 = model doesn't support it.
-# MAX_MINUTES         — Hard circuit breaker. Tighter on expensive models.
+# parse_model_tier sets MAX_MINUTES, MAX_RETRIES, MAX_CONTEXT_TOKENS,
+# TARGET_INPUT_TOKENS, and MAX_THINKING_TOKENS based on the chosen model tier.
 # ==============================================================================
-# Defaults (Sonnet Tier Baseline)
-MAX_MINUTES="10"
-MAX_RETRIES=3
-MAX_CONTEXT_TOKENS=80000
-TARGET_INPUT_TOKENS=40000
-MAX_THINKING_TOKENS=10000
-
-if [[ "$CHOSEN_MODEL" == *"haiku"* ]]; then
-    # Fast and economical. Smaller footprint, no thinking tokens.
-    MAX_MINUTES="15"
-    MAX_CONTEXT_TOKENS=50000
-    TARGET_INPUT_TOKENS=25000
-    MAX_THINKING_TOKENS=0
-elif [[ "$CHOSEN_MODEL" == *"opus"* ]]; then
-    # Premium tier. Full context, tight timeout chain.
-    MAX_MINUTES="5"
-    MAX_RETRIES=2
-    MAX_CONTEXT_TOKENS=120000
-    TARGET_INPUT_TOKENS=60000
-    MAX_THINKING_TOKENS=24000
-elif [[ "$CHOSEN_MODEL" == *"fable"* ]]; then
-    # Highest tier. Ample context, tightest time threshold.
-    MAX_MINUTES="4"
-    MAX_RETRIES=2
-    MAX_CONTEXT_TOKENS=120000
-    TARGET_INPUT_TOKENS=60000
-    MAX_THINKING_TOKENS=0   # Fable manages its own adaptive reasoning internally
-fi
+parse_model_tier "$CHOSEN_MODEL"
 
 # ==============================================================================
 # OAUTH TOKEN EXTRACTION
@@ -195,32 +157,8 @@ DOCKER_RECOVERY_BASE=(
 
 # ==============================================================================
 # HELPER FUNCTIONS
+# (strip_ansi, wait_for_quota, build_prompt_with_advice are in lib/launch-lib.sh)
 # ==============================================================================
-
-# Strip ANSI color/cursor codes and carriage returns so grep sees plain text.
-strip_ansi() {
-    sed 's/\x1b\[[0-9;]*[A-Za-z]//g; s/\r//g' "$1"
-}
-
-# Block until the Claude Pro quota window reopens, printing a heartbeat line
-# every 5 minutes so the terminal shows the script is still alive.
-wait_for_quota() {
-    local target_epoch="$1"
-    local target_display="$2"
-    echo "💤 Entering standby. Quota resets at $target_display (including 5-min buffer)."
-    while true; do
-        local now remaining mins secs curr_time
-        now=$(date +%s)
-        remaining=$(( target_epoch - now ))
-        [ "$remaining" -le 0 ] && break
-        mins=$(( remaining / 60 ))
-        secs=$(( remaining % 60 ))
-        curr_time=$(date '+%H:%M:%S')
-        echo "   [$curr_time] Waiting... ${mins}m ${secs}s until $target_display"
-        sleep 300
-    done
-    echo "⏰ Quota window open. Resuming task..."
-}
 
 # Run a one-shot headless claude call to create CLAUDE.md. Isolated from the
 # main retry loop so setup failures don't consume retry slots or corrupt
@@ -360,19 +298,6 @@ PYEOF
         echo "⚠️  Gemini audit returned no response — continuing without advice."
         GEMINI_ADVICE_TEXT=""
         return 1
-    fi
-}
-
-# Prepends Gemini advice to a base prompt string and prints the result.
-# Called to build TASK_PROMPT before each retry attempt.
-# Usage: TASK_PROMPT=$(build_prompt_with_advice "$BASE_TASK")
-build_prompt_with_advice() {
-    local base="$1"
-    if [ -n "${GEMINI_ADVICE_TEXT:-}" ]; then
-        printf '=== GEMINI ARCHITECT ADVICE (from previous failed attempt) ===\n%s\n=== END ADVICE ===\n\n%s' \
-            "$GEMINI_ADVICE_TEXT" "$base"
-    else
-        printf '%s' "$base"
     fi
 }
 

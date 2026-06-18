@@ -1,0 +1,6 @@
+{
+  "claudeAiOauth": {
+    "accessToken": "fake-access-token-abc123",
+    "refreshToken": "fake-refresh-token-xyz456"
+  }
+}

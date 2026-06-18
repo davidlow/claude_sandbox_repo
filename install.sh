@@ -20,7 +20,9 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 chmod +x "$REPO_DIR/launch-interactive.sh" \
          "$REPO_DIR/launch-scripted.sh" \
          "$REPO_DIR/setup-auth.sh" \
-         "$REPO_DIR/entrypoint.sh"
+         "$REPO_DIR/entrypoint.sh" \
+         "$REPO_DIR/tests/run_tests.sh" \
+         "$REPO_DIR/tests"/test_*.sh
 
 # 4. Build the sandbox image
 echo "📦 Building the Claude Code Docker sandbox image..."
