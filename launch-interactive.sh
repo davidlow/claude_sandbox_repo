@@ -37,7 +37,7 @@ fi
 
 CHOSEN_MODEL="${1:-claude-sonnet-4-6}"
 SANITIZED_DIR=$(basename "$(pwd)" | tr -cs '[:alnum:]-' '-' | tr '[:upper:]' '[:lower:]')
-CONTAINER_NAME="claude-interactive-${SANITIZED_DIR:-sandbox}"
+CONTAINER_NAME="claude-interactive-${SANITIZED_DIR:-sandbox}-$$"
 
 # Inject the OAuth token directly so Claude Code authenticates without
 # any interactive prompts, regardless of first-run wizard state.

@@ -109,7 +109,7 @@ fi
 
 # Sanitize current directory name for use as Docker container name suffix.
 SANITIZED_DIR=$(basename "$(pwd)" | tr -cs '[:alnum:]-' '-' | tr '[:upper:]' '[:lower:]')
-CONTAINER_NAME="claude-auto-${SANITIZED_DIR:-sandbox}"
+CONTAINER_NAME="claude-auto-${SANITIZED_DIR:-sandbox}-$$"
 
 # Temp log captures each run's output so rate-limit messages can be parsed
 # after the container exits. Cleaned up on script exit.
