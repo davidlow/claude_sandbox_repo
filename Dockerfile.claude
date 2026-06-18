@@ -27,8 +27,12 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Create the Python venv as claudeuser so it has write access for pip installs.
+# Also create the ~/.local/bin/claude symlink that Claude Code's doctor check
+# expects — it looks for a user-local binary in addition to the global install.
 USER claudeuser
-RUN python3 -m venv /home/claudeuser/.venv
+RUN python3 -m venv /home/claudeuser/.venv && \
+    mkdir -p /home/claudeuser/.local/bin && \
+    ln -s /usr/bin/claude /home/claudeuser/.local/bin/claude
 ENV PATH="/home/claudeuser/.venv/bin:$PATH"
 
 WORKDIR /workspace
