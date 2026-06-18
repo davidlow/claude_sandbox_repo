@@ -52,30 +52,41 @@ if [ -f "$HOME/.claude/settings.json" ]; then
     cp "$HOME/.claude/settings.json" "$AUTH_DIR/settings.json"
 fi
 
-# Note: ~/.claude.json is intentionally NOT copied from the host. That file
-# contains host-specific paths (/home/dhlinca/...) that cause Claude Code to
-# reset it to a blank state inside the container. Instead, the entrypoint
-# saves ~/.claude.json back to claude-auth/ after each run so settings
-# (theme, onboarding) persist. On the very first run a one-time setup wizard
-# fires — just select a theme (option 1 is fine) and you're done.
+# Extract OAuth tokens so we can inject them into the bootstrap container.
+OAUTH_TOKEN=$(python3 -c "
+import json
+with open('$AUTH_DIR/.credentials.json') as f:
+    print(json.load(f)['claudeAiOauth']['accessToken'])
+" 2>/dev/null)
+OAUTH_REFRESH=$(python3 -c "
+import json
+with open('$AUTH_DIR/.credentials.json') as f:
+    print(json.load(f)['claudeAiOauth']['refreshToken'])
+" 2>/dev/null)
 
-# Verify the credentials work inside the container.
-# Capture to a variable first to avoid pipefail interacting with the pipeline.
-echo "🔍 Verifying credentials..."
-AUTH_STATUS=$(docker run --rm \
-    -v "$AUTH_DIR":/home/claudeuser/.claude \
-    claude-sandbox \
-    claude auth status 2>&1) || true
-
-if echo "$AUTH_STATUS" | tr -d '\r' | grep -q '"loggedIn": true'; then
-    echo "✅ Credentials verified — Claude Pro subscription active."
-    echo ""
-    echo "   You can now run: claude-box"
-else
-    echo "❌ Credentials did not verify inside the container."
-    echo "   Auth status returned:"
-    echo "$AUTH_STATUS"
-    echo ""
-    echo "   Try re-authenticating: claude auth login --claudeai"
+if [ -z "$OAUTH_TOKEN" ]; then
+    echo "❌ Could not extract OAuth token from credentials file."
     exit 1
 fi
+
+# Bootstrap ~/.claude.json inside the container with a quick non-interactive
+# run. Claude Code writes machineID, userID, and feature flags on first start;
+# without these fields every TUI launch shows the first-run wizard (theme
+# picker + browser auth step). The entrypoint's EXIT trap saves the resulting
+# ~/.claude.json back to claude-auth/ so subsequent runs skip the wizard.
+echo "🔧 Bootstrapping Claude config (skip first-run wizard)..."
+docker run --rm \
+    -v "$AUTH_DIR":/home/claudeuser/.claude \
+    -v /tmp:/workspace \
+    -e CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN" \
+    -e CLAUDE_CODE_OAUTH_REFRESH_TOKEN="$OAUTH_REFRESH" \
+    claude-sandbox \
+    claude -p "hello" > /dev/null 2>&1 || true
+
+if [ -f "$AUTH_DIR/.claude.json" ]; then
+    echo "✅ Config bootstrapped — first-run wizard will be skipped."
+else
+    echo "⚠️  Could not bootstrap config. First run may show a setup wizard."
+fi
+echo ""
+echo "✅ Setup complete. Run: claude-box"
