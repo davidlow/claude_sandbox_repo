@@ -258,3 +258,68 @@ build_gemini_refactor_prompt() {
     printf '=== FAILURE CONTEXT ===\n'
     cat "$context_file" 2>/dev/null || printf '(context file not found)\n'
 }
+
+# ---------------------------------------------------------------------------
+# decision_log_init <file> <pipeline> <task> <model>
+# Creates a new timestamped decision log with a standard markdown header.
+# The parent directory is created if it does not exist.
+# ---------------------------------------------------------------------------
+decision_log_init() {
+    local file="$1"
+    local pipeline="$2"
+    local task="$3"
+    local model="$4"
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M')
+    mkdir -p "$(dirname "$file")"
+    printf '# %s: %s\n**Date:** %s\n**Pipeline:** %s\n**Model:** %s\n**Status:** in-progress\n\n## Task\n%s\n\n' \
+        "$pipeline" "$task" "$timestamp" "$pipeline" "$model" "$task" > "$file"
+}
+
+# ---------------------------------------------------------------------------
+# decision_log_section <file> <title> [content_file]
+# Appends a titled section to a decision log. If content_file exists on disk,
+# its contents are embedded verbatim. If absent or unspecified, a placeholder
+# is written. For inline text notes, use decision_log_note instead.
+# ---------------------------------------------------------------------------
+decision_log_section() {
+    local file="$1"
+    local title="$2"
+    local content_file="${3:-}"
+    [ ! -f "$file" ] && return 0
+    printf '\n## %s\n\n' "$title" >> "$file"
+    if [ -n "$content_file" ] && [ -f "$content_file" ]; then
+        cat "$content_file" >> "$file"
+    else
+        printf '*(not available)*\n' >> "$file"
+    fi
+    printf '\n' >> "$file"
+}
+
+# ---------------------------------------------------------------------------
+# decision_log_note <file> <title> <text>
+# Appends a titled section containing an inline text note to a decision log.
+# Use this when there is no artifact file to embed (e.g. phase skipped, failed).
+# ---------------------------------------------------------------------------
+decision_log_note() {
+    local file="$1"
+    local title="$2"
+    local text="$3"
+    [ ! -f "$file" ] && return 0
+    printf '\n## %s\n\n%s\n\n' "$title" "$text" >> "$file"
+}
+
+# ---------------------------------------------------------------------------
+# decision_log_outcome <file> <status> [notes]
+# Updates the in-progress Status line to the final status (success/failed) and
+# appends an Outcome section. Should be called once at the end of a pipeline run.
+# ---------------------------------------------------------------------------
+decision_log_outcome() {
+    local file="$1"
+    local status="$2"
+    local notes="${3:-}"
+    [ ! -f "$file" ] && return 0
+    sed -i "s/^\*\*Status:\*\* in-progress/**Status:** ${status}/" "$file"
+    printf '\n## Outcome\n\n**Status:** %s\n' "$status" >> "$file"
+    [ -n "$notes" ] && printf '\n%s\n' "$notes" >> "$file"
+}

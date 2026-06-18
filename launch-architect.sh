@@ -34,9 +34,10 @@ set -eo pipefail
 #    claude-architect "redesign the auth module" --no-gemini
 #
 # INTERMEDIATE FILES (kept on disk for review after the run):
-#    docs/architecture_candidates.md    3 approaches from Phase 1
-#    docs/gemini_architectural_audit.md Gemini critique (if enabled)
-#    docs/approved_architecture.md      Implementation spec from Phase 2
+#    docs/architecture_candidates.md              3 approaches from Phase 1
+#    docs/gemini_architectural_audit.md           Gemini critique (if enabled)
+#    docs/approved_architecture.md                Implementation spec from Phase 2
+#    docs/decisions/YYYY-MM-DD_HHMM_<task>_architect.md  Timestamped decision log
 #
 # SETUP:
 #    Run claude-box-auth once before first use. Export GEMINI_API_KEY to enable critique.
@@ -95,12 +96,22 @@ fi
 BRAINSTORM_MODEL="claude-haiku-4-5"
 EVAL_MODEL="claude-sonnet-4-6"
 
-mkdir -p docs
+mkdir -p docs docs/decisions
+TIMESTAMP=$(date '+%Y-%m-%d_%H%M')
+FEATURE_SLUG=$(printf '%s' "$ORIGINAL_TASK_PROMPT" \
+    | tr '[:upper:]' '[:lower:]' \
+    | tr -cs 'a-z0-9' '-' \
+    | sed 's/-\{2,\}/-/g; s/^-//; s/-$//' \
+    | cut -c1-40 \
+    | sed 's/-$//')
+DECISION_FILE="docs/decisions/${TIMESTAMP}_${FEATURE_SLUG}_architect.md"
+decision_log_init "$DECISION_FILE" "architect" "$ORIGINAL_TASK_PROMPT" "$CHOSEN_MODEL"
 
 echo "🏛️  claude-architect pipeline"
 echo "   Task:     $ORIGINAL_TASK_PROMPT"
 echo "   Impl:     $CHOSEN_MODEL"
 echo "   Gemini:   $([ "$GEMINI_ENABLED" = true ] && echo "enabled" || echo "disabled")"
+echo "   Log:      $DECISION_FILE"
 echo ""
 
 # CLAUDE.md bootstrap: generate before Phase 1 if absent so all phases benefit.
@@ -142,8 +153,10 @@ fi
 
 if [ -f "docs/architecture_candidates.md" ]; then
     echo "✅ Phase 1 complete: docs/architecture_candidates.md"
+    decision_log_section "$DECISION_FILE" "Phase 1: Architectural Candidates" "docs/architecture_candidates.md"
 else
     echo "⚠️  Phase 1 produced no output. Phase 2 will brainstorm and select independently."
+    decision_log_note "$DECISION_FILE" "Phase 1: Architectural Candidates" "Phase 1 produced no output — Phase 2 brainstormed and selected independently."
 fi
 echo ""
 
@@ -157,9 +170,11 @@ if [ "$GEMINI_ENABLED" = true ] && [ -f "docs/architecture_candidates.md" ]; the
     build_gemini_architectural_prompt "$ORIGINAL_TASK_PROMPT" "docs/architecture_candidates.md" > "$GEMINI_PROMPT_FILE"
     if call_gemini "$GEMINI_PROMPT_FILE" "docs/gemini_architectural_audit.md"; then
         echo "✅ Gemini critique saved to docs/gemini_architectural_audit.md"
+        decision_log_section "$DECISION_FILE" "Gemini Architectural Critique" "docs/gemini_architectural_audit.md"
     else
         echo "⚠️  Gemini critique failed — Phase 2 will proceed without it."
         rm -f "docs/gemini_architectural_audit.md"
+        decision_log_note "$DECISION_FILE" "Gemini Architectural Critique" "Gemini critique failed — Phase 2 proceeded without it."
     fi
     echo ""
 fi
@@ -188,7 +203,9 @@ Select the single most robust and maintainable approach. Write a definitive impl
 - API contracts or function signatures
 - The exact ordered sequence of implementation steps
 
-Be specific enough that an engineer can implement without clarifying questions. Do NOT write executable code."
+Be specific enough that an engineer can implement without clarifying questions. Do NOT write executable code.
+
+Before making your selection, also review docs/decisions/ for past decision logs from previous pipeline runs on this codebase — they show which approaches have already been tried and their outcomes. Use them only as historical context to avoid repeating past mistakes; do not let them anchor your analysis of the current candidates."
 
 PHASE2_CODE=0
 run_headless_phase "${BASE_CONTAINER}-phase2" "$EVAL_MODEL" "10" "$PHASE2_PROMPT" \
@@ -204,8 +221,10 @@ fi
 if [ ! -f "docs/approved_architecture.md" ]; then
     echo "❌ Phase 2 failed to produce an implementation spec after 2 attempts."
     echo "   Check docs/architecture_candidates.md for Phase 1 output."
+    decision_log_outcome "$DECISION_FILE" "failed" "Phase 2 failed to produce an implementation spec after 2 attempts."
     exit 1
 fi
+decision_log_section "$DECISION_FILE" "Phase 2: Selected Architecture" "docs/approved_architecture.md"
 echo "✅ Phase 2 complete: docs/approved_architecture.md"
 echo ""
 
@@ -215,8 +234,15 @@ echo ""
 # Claude reads the approved spec and implements it step by step.
 # ==============================================================================
 echo "🏗️  PHASE 3: Implementing approved architecture (${CHOSEN_MODEL})..."
-IMPL_PROMPT="Read docs/approved_architecture.md. Implement the exact spec found there, following the implementation steps in order. Do not deviate from the approved design. After implementation, run any available tests to verify correctness."
+IMPL_PROMPT="Read docs/approved_architecture.md. Implement the exact spec found there, following the implementation steps in order. Do not deviate from the approved design. For context on why this approach was chosen over the alternatives, see ${DECISION_FILE}. After implementation, run any available tests to verify correctness."
 IMPL_ARGS=("$IMPL_PROMPT" "$CHOSEN_MODEL")
 [ "$GEMINI_ENABLED" = "false" ] && IMPL_ARGS+=("--no-gemini")
 
-exec "$(dirname "$0")/launch-scripted.sh" "${IMPL_ARGS[@]}"
+"$(dirname "$0")/launch-scripted.sh" "${IMPL_ARGS[@]}"
+PHASE3_EXIT=$?
+if [ $PHASE3_EXIT -eq 0 ]; then
+    decision_log_outcome "$DECISION_FILE" "success" "Phase 3 implementation completed successfully."
+else
+    decision_log_outcome "$DECISION_FILE" "failed" "Phase 3 implementation failed (exit ${PHASE3_EXIT})."
+fi
+exit $PHASE3_EXIT

@@ -137,6 +137,61 @@ RF_MISSING=$(build_gemini_refactor_prompt "some task" "/nonexistent/context_$$.t
 assert_contains "refactor prompt: handles missing file gracefully" "context file not found" "$RF_MISSING"
 
 # ==============================================================================
+suite "decision_log_init"
+# ==============================================================================
+
+DL_FILE="/tmp/decision_test_$$.md"
+trap 'rm -f "$DL_FILE"' RETURN
+
+decision_log_init "$DL_FILE" "architect" "add a plugin system" "claude-sonnet-4-6"
+
+DL_OUT=$(cat "$DL_FILE")
+assert_contains "decision_log_init: embeds pipeline name" "architect" "$DL_OUT"
+assert_contains "decision_log_init: embeds task" "add a plugin system" "$DL_OUT"
+assert_contains "decision_log_init: embeds model" "claude-sonnet-4-6" "$DL_OUT"
+assert_contains "decision_log_init: status is in-progress" "in-progress" "$DL_OUT"
+
+# ==============================================================================
+suite "decision_log_section"
+# ==============================================================================
+
+DL_CFILE=$(mktemp)
+trap 'rm -f "$DL_CFILE"' RETURN
+printf 'Option A is recommended\n' > "$DL_CFILE"
+
+decision_log_section "$DL_FILE" "Phase 1: Candidates" "$DL_CFILE"
+DL_OUT=$(cat "$DL_FILE")
+assert_contains "decision_log_section: adds section header" "Phase 1: Candidates" "$DL_OUT"
+assert_contains "decision_log_section: embeds file content" "Option A is recommended" "$DL_OUT"
+
+decision_log_section "$DL_FILE" "Gemini Critique" "/nonexistent/critique_$$.md"
+DL_OUT=$(cat "$DL_FILE")
+assert_contains "decision_log_section: missing file writes placeholder" "not available" "$DL_OUT"
+
+rm -f "$DL_CFILE"
+
+# ==============================================================================
+suite "decision_log_note"
+# ==============================================================================
+
+decision_log_note "$DL_FILE" "Phase 2 Notes" "Phase 2 completed via subprocess."
+DL_OUT=$(cat "$DL_FILE")
+assert_contains "decision_log_note: adds section header" "Phase 2 Notes" "$DL_OUT"
+assert_contains "decision_log_note: embeds inline text" "Phase 2 completed via subprocess" "$DL_OUT"
+
+# ==============================================================================
+suite "decision_log_outcome"
+# ==============================================================================
+
+decision_log_outcome "$DL_FILE" "success" "All phases completed."
+DL_OUT=$(cat "$DL_FILE")
+assert_contains "decision_log_outcome: adds Outcome section" "Outcome" "$DL_OUT"
+assert_contains "decision_log_outcome: sets success status" "success" "$DL_OUT"
+assert_contains "decision_log_outcome: includes notes" "All phases completed" "$DL_OUT"
+
+rm -f "$DL_FILE"
+
+# ==============================================================================
 suite "pipeline scripts — help flags"
 # ==============================================================================
 
