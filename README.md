@@ -1,100 +1,129 @@
-# Claude Code Cross-Platform Docker Sandbox
+# Claude Code Docker Sandbox
 
-This repository provides a lightweight, ephemeral Docker sandbox for running Anthropic's Claude Code CLI tool completely isolated from your host operating system.
-
-It is tailored to run natively on **Standard Debian Linux** environments and **ChromeOS Linux Developer Environments (Crostini)** using an identical, automated setup.
+A lightweight Docker sandbox for running Anthropic's Claude Code CLI using a **Claude Pro subscription** (no API key required). Designed for **Debian Linux** and **ChromeOS Linux (Crostini)**.
 
 ---
 
 ## How it Works
 
-Claude Code requires terminal access to execute build commands, modify your codebase, and run scripts. To prevent accidental host modifications or dependency pollution, this architecture utilizes a **"Sidecar/Volume-Mounted" Docker Sandbox**:
+Claude Code runs inside an ephemeral Debian container that:
 
-* **Isolation:** Claude runs inside an isolated Debian container with access *only* to the single project directory you explicitly launch it from.
-* **Ephemerality:** The sandbox instance is automatically destroyed (`--rm`) when it exits, ensuring every project workflow starts from a pristine state.
-* **Cross-Platform Host Integration:** The user inside the container is explicitly pinned to UID 1000, matching the native default user settings of both standard Debian systems and Crostini to prevent file permission mismatches.
+- **Sees only your project** — the current directory is bind-mounted as `/workspace`; the rest of your filesystem is invisible
+- **Uses your host credentials** — `~/.claude` is mounted read/write so the container uses the same Claude Pro session as your host install
+- **Destroys itself on exit** — `--rm` ensures every run starts from a pristine state
+- **Matches host UIDs** — the container user is pinned to UID 1000, avoiding file permission mismatches on Debian and Crostini
+
+### Authentication
+
+OAuth tokens are extracted from `~/.claude/.credentials.json` and injected as `CLAUDE_CODE_OAUTH_TOKEN` / `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` at launch. This bypasses Claude Code's first-run browser auth wizard so you drop straight into the chat.
 
 ---
 
 ## Repository Structure
 
-* Dockerfile.claude: Defines the Node.js/Debian base sandbox image
-* install.sh: Automates Docker install, image builds, and alias injection
-* launch-interactive.sh: Core script wrapping the standard Claude UX
-* launch-scripted.sh: Core script wrapping autonomous execution mode
-* README.md: This documentation file
+| File | Purpose |
+|---|---|
+| `Dockerfile.claude` | Debian image: Node 20, Python venv, Claude Code native install |
+| `entrypoint.sh` | Restores `~/.claude.json` into the container home on every start; saves it back on exit |
+| `install.sh` | One-time setup: installs Docker, builds image, registers shell aliases |
+| `setup-auth.sh` | One-time auth bootstrap: copies config and warms up Claude's first-run state |
+| `launch-interactive.sh` | `claude-box` — interactive Claude Code session |
+| `launch-scripted.sh` | `claude-yolo` — autonomous mode with rate-limit auto-recovery |
 
 ---
 
-## Installation and Setup
+## Prerequisites
 
-### 1. Configure Your Host API Key
+- A **Claude Pro** (or Max/Team/Enterprise) subscription — log in on your host with `claude auth login --claudeai` before running setup
+- **Docker** (installed automatically by `install.sh` if missing)
+- **Debian Linux** or **ChromeOS Linux (Crostini)**
 
-Because Claude Code runs natively using an interactive browser OAuth session, it stores credentials locally. Because the Docker container cannot access your host's filesystem, **you must use a standard Anthropic API Key.**
+---
 
-1. Generate an API Key at the Anthropic Console.
-2. Open your host profile configuration:
-`nano ~/.bashrc`
-3. Append your key to the bottom of the file:
-`export ANTHROPIC_API_KEY="sk-ant-api03-your-actual-api-key"`
-4. Save and exit (Ctrl+O, Enter, Ctrl+X), then reload your terminal configuration:
-`source ~/.bashrc`
+## Installation
 
-### 2. Deploy the Sandbox Repository
-
-Clone your repository onto the machine and execute the installation manager script:
+### 1. Clone and run the installer
 
 ```bash
-cd ~
-git clone <your-repository-url> claude-sandbox-repo
-cd claude-sandbox-repo
-
-# Ensure scripts are executable
-chmod +x install.sh launch-interactive.sh launch-scripted.sh
-
-# Run the unified environment setup
+git clone <your-repository-url> ~/claude-sandbox-repo
+cd ~/claude-sandbox-repo
 ./install.sh
-
 ```
 
-### 3. Environment Reload (Critical Step)
+`install.sh` will:
+- Install Docker if not present
+- Build the `claude-sandbox` Docker image
+- Register three shell aliases in `~/.bashrc`: `claude-box`, `claude-yolo`, `claude-box-auth`
 
-* **On a Chromebook:** Right-click the **Terminal** app icon on your shelf/launcher, select **"Shut down Linux"**, then reopen the Terminal app to reload the system groups.
-* **On Native Debian:** Open a fresh terminal window or run `source ~/.bashrc`.
+### 2. Reload your shell
+
+- **Chromebook:** Right-click the Terminal icon → "Shut down Linux" → reopen Terminal
+- **Debian:** `source ~/.bashrc` or open a new terminal
+
+### 3. Bootstrap credentials (one time only)
+
+You must already be logged into Claude Code on the host (`claude auth login --claudeai`). Then:
+
+```bash
+claude-box-auth
+```
+
+This copies `~/.claude.json` into `~/.claude/` for the container to find, and runs a quick bootstrap call to pre-populate Claude's first-run config state. You only need to do this once, or after re-installing Claude Code.
 
 ---
 
-## Daily Workflow Guide
+## Daily Usage
 
-Once installed, two global aliases are injected into your system shell (`~/.bashrc`). Navigate into **any project directory** on your machine and invoke the tool depending on your development needs:
+Navigate to **any project directory**, then run either command.
 
-### Use Case 1: Interactive Collaboration (`claude-box`)
+### Interactive mode — `claude-box`
 
-Use this mode for standard interactive coding sessions, exploration, or debugging. Claude will ask you for confirmation (Y/n) before executing system-level actions.
-
-```bash
-cd ~/my-projects/web-app
-claude-box
-
-```
-
-* **Result:** Drops your shell interface straight into the Claude Code terminal layout, safe-fenced to the target directory.
-
-### Use Case 2: Autonomous Task Scripting (`claude-yolo`)
-
-Use this mode when you want to hand Claude a complex instruction and walk away. It bypasses security prompts, giving Claude the freedom to rapidly cycle through testing, linting, and bug fixing autonomously until completion.
+Drops you into a full Claude Code session. Claude asks for permission before making changes.
 
 ```bash
-cd ~/my-projects/web-app
-claude-yolo "Run our python test suite, locate any syntax or logic errors, and iterate on fixing them until everything passes cleanly."
-
+cd ~/my-project
+claude-box                        # default model (claude-sonnet-4-6)
+claude-box claude-opus-4-8        # override model
 ```
 
-* **Result:** The sandbox launches headlessly, forces execution via Claude's automated non-interactive processing mode (`-p`), automatically handles `--dangerously-skip-permissions`, and safely self-destructs the box when finished.
+### Autonomous mode — `claude-yolo`
+
+Give Claude a task and walk away. It runs with `--dangerously-skip-permissions`, handles timeouts, compacts context when needed, and automatically waits out Claude Pro rate limits.
+
+```bash
+cd ~/my-project
+claude-yolo "run the test suite and fix any failures"
+claude-yolo "refactor the auth module for readability" claude-opus-4-8
+```
+
+**Rate limit handling:** if Claude Pro's token quota is exhausted mid-task, `claude-yolo` detects the reset time from the error message, prints a countdown every 5 minutes, then resumes automatically — no intervention needed.
 
 ---
 
-## Safe Development Practices
+## When Your Session Expires
 
-* **Commit Often:** While Claude cannot modify files *outside* your mounted directory, it has full rights to change everything *inside* it. Always ensure your git worktree is clean or safely committed before using `claude-yolo` to protect your source file versions.
-* **API Token Consumption:** In autonomous (`claude-yolo`) mode, ensure your prompt limits or looping mechanisms are sound to avoid unnecessary cost spikes from unintentional recursive debugging loop issues.
+Claude Pro sessions have a lifetime. When they expire, re-authenticate on the host and re-run the bootstrap:
+
+```bash
+claude auth login --claudeai   # browser login on the host
+claude-box-auth                # re-copy config into the container mount
+```
+
+---
+
+## Updating Claude Code
+
+Claude Code's native install inside the image supports auto-updates, but since containers are ephemeral those updates are lost on exit. To pick up a new version permanently, rebuild the image:
+
+```bash
+cd ~/claude-sandbox-repo
+docker build -t claude-sandbox -f Dockerfile.claude .
+```
+
+---
+
+## Safe Usage Notes
+
+- **Commit before `claude-yolo`** — the container has full read/write access to your project directory. Stash or commit your work first.
+- **Rate limits** — `claude-yolo` handles Pro rate limits automatically, but very long tasks may exhaust multiple quota windows.
+- **`~/.claude` is shared** — the container reads and writes to your host's `~/.claude/` directory, so session history is shared between your host Claude Code and the sandbox.
