@@ -1,35 +1,45 @@
 #!/bin/bash
-set -eo pipefail # Hardens script execution against unhandled pipe failures
+set -eo pipefail
 # Note: -u (nounset) is intentionally omitted. Claude Code's bash shell
 # integration installs hooks that reference $ZSH_VERSION, which is unset in
 # bash. With -u active, those hooks error-out and break docker tee pipelines.
 
 # ==============================================================================
-# claude-yolo — Rate-Limit Adaptive Autonomous Sandbox Runner
+# claude-yolo — Context-Aware, Cross-Model Adaptive Autonomous Sandbox Runner
 #
 # Launches Claude Code in a sandboxed Docker container in non-interactive
 # (scripted) mode. Claude executes the given task autonomously, bypassing
 # all permission prompts, and the container is destroyed when it exits.
 #
-# When Claude Pro's token quota is exhausted, the script detects the reset
-# time from the error message, waits (printing a status line every 5 minutes),
-# and resumes from the existing session automatically.
+# CORE PIPELINES:
+#   - Context Bootstrap:   Auto-generates CLAUDE.md if absent before the main task.
+#   - Rate-Limit Adapting: Pauses and resumes automatically when token quotas reset.
+#   - Strategy Recovery:   /compact (A), handoff+reset (B+C), then Gemini audit.
+#   - Cross-Model Audit:   Sends failure context to Gemini 2.5 Flash for architect
+#                          advice; injects the recommendation into the next attempt.
 #
 # USAGE:
-#    claude-yolo "your task description" [model]
+#    claude-yolo "your task description" [model] [--no-gemini]
 #
 # ARGUMENTS:
 #    "your task"   The instruction string for Claude to execute autonomously.
 #    model         (Optional) Claude model to use. Defaults to claude-sonnet-4-6.
 #                  Supported tiers: haiku, sonnet (default), opus, fable
 #
+# FLAGS:
+#    --no-gemini   Disable Gemini cross-model audit on failure.
+#                  Audit runs by default when GEMINI_API_KEY is set in the
+#                  environment; this flag suppresses it even if the key exists.
+#
 # EXAMPLES:
 #    claude-yolo "run the test suite and fix any failures"
 #    claude-yolo "refactor the auth module for readability" claude-opus-4-8
 #    claude-yolo "add input validation to all API endpoints" claude-haiku-4-5
+#    claude-yolo "migrate the database schema" --no-gemini
 #
 # SETUP:
 #    Run claude-box-auth once before first use to save your Claude Pro login.
+#    Export GEMINI_API_KEY (from Google AI Studio) to enable cross-model audits.
 #
 # SAFETY:
 #    - Claude has full read/write access to your current directory.
@@ -37,11 +47,24 @@ set -eo pipefail # Hardens script execution against unhandled pipe failures
 #    - Context and time limits are enforced per model tier to control costs.
 # ==============================================================================
 
-# Dynamic help flag parsing that strips the header comments and presents them cleanly
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     sed -n '/^# ====/,/^# ====/p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'
     exit 0
 fi
+
+# ==============================================================================
+# ARGUMENT PARSING
+# Extract --no-gemini from anywhere in the argument list; remaining args are
+# treated positionally (task prompt, then optional model).
+# ==============================================================================
+GEMINI_ENABLED=true
+POSITIONAL_ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --no-gemini) GEMINI_ENABLED=false ;;
+        *) POSITIONAL_ARGS+=("$arg") ;;
+    esac
+done
 
 CREDS="$HOME/.claude/.credentials.json"
 if [ ! -f "$CREDS" ]; then
@@ -50,28 +73,30 @@ if [ ! -f "$CREDS" ]; then
     exit 1
 fi
 
-if [ -z "${1:-}" ]; then
+if [ -z "${POSITIONAL_ARGS[0]:-}" ]; then
     echo "❌ Error: You must provide an instruction string."
-    echo "Usage: claude-yolo \"your task\" [optional_model]"
+    echo "Usage: claude-yolo \"your task\" [optional_model] [--no-gemini]"
     echo "       claude-yolo --help"
     exit 1
 fi
 
-ORIGINAL_TASK_PROMPT="$1"   # Never mutated — used when rebuilding retry prompts
-TASK_PROMPT="$1"
-CHOSEN_MODEL="${2:-claude-sonnet-4-6}" # Baseline default
+ORIGINAL_TASK_PROMPT="${POSITIONAL_ARGS[0]}"
+CHOSEN_MODEL="${POSITIONAL_ARGS[1]:-claude-sonnet-4-6}"
+
+# Gemini audit requires an API key; silently disable if absent so the script
+# works identically for users who haven't configured one.
+[ -z "${GEMINI_API_KEY:-}" ] && GEMINI_ENABLED=false
 
 # ==============================================================================
-# --- DYNAMIC SAFE-FENCE ENGINE (High-Capability / Cost-Protected) ---
+# DYNAMIC SAFE-FENCE ENGINE (High-Capability / Cost-Protected)
 # Balances the deep context needs of elite models with aggressive host timeouts.
 #
-# MAX_CONTEXT_TOKENS  — The maximum memory cap before an auto-compaction trigger.
-#                       Scales UP with model tier: bigger model = bigger context.
+# MAX_CONTEXT_TOKENS  — Memory cap before auto-compaction trigger.
 # TARGET_INPUT_TOKENS — Soft target for tokens sent per API call (~50% of max).
 # MAX_THINKING_TOKENS — Reasoning token allocation. 0 = model doesn't support it.
 # MAX_MINUTES         — Hard circuit breaker. Tighter on expensive models.
 # ==============================================================================
-# Defaults (Sonnet Tier Baseline Setup)
+# Defaults (Sonnet Tier Baseline)
 MAX_MINUTES="10"
 MAX_RETRIES=3
 MAX_CONTEXT_TOKENS=80000
@@ -79,37 +104,30 @@ TARGET_INPUT_TOKENS=40000
 MAX_THINKING_TOKENS=10000
 
 if [[ "$CHOSEN_MODEL" == *"haiku"* ]]; then
-    # Haiku: Fast and incredibly economical. Smaller memory footprint, no thinking tokens.
-    MAX_MINUTES="15" # Cheap enough to give it maximum leeway to loop and try alternatives
+    # Fast and economical. Smaller footprint, no thinking tokens.
+    MAX_MINUTES="15"
     MAX_CONTEXT_TOKENS=50000
     TARGET_INPUT_TOKENS=25000
     MAX_THINKING_TOKENS=0
-
 elif [[ "$CHOSEN_MODEL" == *"opus"* ]]; then
-    # Opus: Premium tier. Give it full context capacity to solve massive architecture shifts,
-    # but run it on a strict, brief timeout chain to mitigate long-running sessions.
+    # Premium tier. Full context, tight timeout chain.
     MAX_MINUTES="5"
     MAX_RETRIES=2
     MAX_CONTEXT_TOKENS=120000
     TARGET_INPUT_TOKENS=60000
     MAX_THINKING_TOKENS=24000
-
 elif [[ "$CHOSEN_MODEL" == *"fable"* ]]; then
-    # Fable: Highest-tier computational model. Needs ample room to cross-reference logs,
-    # but relies on the tightest time threshold to cut execution long before token limits fill up.
+    # Highest tier. Ample context, tightest time threshold.
     MAX_MINUTES="4"
     MAX_RETRIES=2
     MAX_CONTEXT_TOKENS=120000
     TARGET_INPUT_TOKENS=60000
-    MAX_THINKING_TOKENS=0 # Fable manages its own adaptive reasoning internally
+    MAX_THINKING_TOKENS=0   # Fable manages its own adaptive reasoning internally
 fi
+
 # ==============================================================================
-
-ATTEMPT=1
-SUCCESS=false
-SESSION_STARTED=false
-
-# Inject OAuth tokens so Claude Code authenticates without interactive prompts.
+# OAUTH TOKEN EXTRACTION
+# ==============================================================================
 OAUTH_TOKEN=$(python3 -c "
 import json
 with open('$CREDS') as f:
@@ -122,22 +140,22 @@ with open('$CREDS') as f:
 " 2>/dev/null)
 
 if [ -z "$OAUTH_TOKEN" ]; then
-    echo "❌ Error: Could not read OAuth token from $AUTH_DIR/.credentials.json"
+    echo "❌ Error: Could not read OAuth token from $CREDS"
     echo "   Run 'claude-box-auth' to refresh your credentials."
     exit 1
-fi   # Flips to true after our first attempt creates a session
+fi
 
-# Sanitizes paths, transforms spaces/symbols to dashes, forces lower-case
-# for Docker container naming conformity.
+# Sanitize current directory name for use as Docker container name suffix.
 SANITIZED_DIR=$(basename "$(pwd)" | tr -cs '[:alnum:]-' '-' | tr '[:upper:]' '[:lower:]')
 CONTAINER_NAME="claude-auto-${SANITIZED_DIR:-sandbox}"
 
-# Temp file captures a copy of each run's output so we can scan it for rate-limit
-# messages after the container exits. Cleaned up automatically on script exit.
+# Temp log captures each run's output so rate-limit messages can be parsed
+# after the container exits. Cleaned up on script exit.
+# .gemini_audit_input.txt is also temp. GEMINI_ADVICE.md is intentionally kept
+# on disk after a final failure so the user can review Gemini's last advice.
 TEMP_LOG="/tmp/claude_exec_${SANITIZED_DIR}_$$.log"
-trap 'rm -f "$TEMP_LOG"' EXIT
+trap 'rm -f "$TEMP_LOG" .gemini_audit_input.txt' EXIT
 
-# Preflight: fail fast with a clear message rather than a Docker internal error.
 if ! docker info >/dev/null 2>&1; then
     echo "❌ Error: Docker is not running or not accessible. Start Docker and try again."
     exit 1
@@ -158,9 +176,9 @@ DOCKER_RUN_BASE=(
   claude-sandbox
 )
 
-# DOCKER_RECOVERY_BASE: recovery passes — no -t (no PTY) since these are automated
-# intermediate steps, not user-interactive sessions. Using -it here breaks when
-# called from non-TTY contexts and sends garbled output to the handoff prompt.
+# DOCKER_RECOVERY_BASE: headless passes — no -t since these are automated steps
+# with no user PTY attached. Using -it here breaks non-TTY contexts and sends
+# garbled output into handoff prompts.
 DOCKER_RECOVERY_BASE=(
   docker run -i --rm
   --name "${CONTAINER_NAME}-recovery"
@@ -175,9 +193,11 @@ DOCKER_RECOVERY_BASE=(
   claude-sandbox
 )
 
+# ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
+
 # Strip ANSI color/cursor codes and carriage returns so grep sees plain text.
-# The PTY inside the container produces these; they corrupt rate-limit message
-# parsing if left in place.
 strip_ansi() {
     sed 's/\x1b\[[0-9;]*[A-Za-z]//g; s/\r//g' "$1"
 }
@@ -202,15 +222,198 @@ wait_for_quota() {
     echo "⏰ Quota window open. Resuming task..."
 }
 
+# Run a one-shot headless claude call to create CLAUDE.md. Isolated from the
+# main retry loop so setup failures don't consume retry slots or corrupt
+# recovery state. Retries once. Always wipes .claude/ on exit so the main
+# task starts from a clean session.
+bootstrap_claude_md() {
+    echo "⚠️  [CONTEXT WARNING] CLAUDE.md not found in repository root."
+    echo "🤖 Generating CLAUDE.md blueprint before starting the main task..."
+
+    local setup_prompt="Analyze this codebase and create a CLAUDE.md file in the root directory. Follow standard Claude Code conventions: project purpose, exact build/test/lint commands, file layout, and engineering/style guidelines for this tech stack. Do not perform any other tasks."
+
+    local attempt
+    for attempt in 1 2; do
+        echo "   [CLAUDE.md Setup] Attempt $attempt/2..."
+        set +e
+        timeout "5m" "${DOCKER_RECOVERY_BASE[@]}" \
+            claude --dangerously-skip-permissions --model "$CHOSEN_MODEL" \
+            -p "$setup_prompt"
+        local exit_code=$?
+        set -e
+
+        # Always wipe setup session context so the main task starts clean.
+        rm -rf .claude/ 2>/dev/null || true
+
+        if [ $exit_code -eq 0 ] && [ -f "CLAUDE.md" ]; then
+            echo "✅ CLAUDE.md created."
+            return 0
+        fi
+        if [ $attempt -lt 2 ]; then
+            echo "   Setup attempt $attempt failed, retrying..."
+        else
+            echo "⚠️  CLAUDE.md setup failed after 2 attempts. Proceeding without it."
+        fi
+    done
+    return 1
+}
+
+# ==============================================================================
+# GEMINI CROSS-MODEL AUDIT
+#
+# Sends failure context to Gemini 2.5 Flash for architectural advice. Writes
+# the recommendation to GEMINI_ADVICE.md and sets GEMINI_ADVICE_TEXT so the
+# main loop can inject it into the next attempt's prompt.
+#
+# Disabled when:
+#   - --no-gemini flag was passed
+#   - GEMINI_API_KEY is not set in the environment
+#
+# GEMINI_ADVICE.md is intentionally NOT cleaned up on failure exit — it is left
+# on disk for the user to review after a final failed run. It IS removed on
+# successful task completion.
+# ==============================================================================
+GEMINI_ADVICE_TEXT=""
+
+run_gemini_audit() {
+    echo "🧠 [GEMINI AUDIT] Sending failure context for cross-model analysis..."
+
+    # Build audit context: task objective + repo blueprint + diff + failure log.
+    # Git diff is capped at 200 lines to stay within Gemini's input window.
+    {
+        echo "=== TASK OBJECTIVE ==="
+        echo "$ORIGINAL_TASK_PROMPT"
+        echo ""
+        echo "=== CLAUDE.md ==="
+        [ -f CLAUDE.md ] && cat CLAUDE.md || echo "(not present)"
+        echo ""
+        echo "=== GIT STATUS ==="
+        if git rev-parse --git-dir >/dev/null 2>&1; then
+            git diff HEAD --stat 2>/dev/null || true
+            echo "---"
+            git diff HEAD 2>/dev/null | head -200 || true
+        else
+            echo "(not a git repository)"
+        fi
+        echo ""
+        echo "=== FAILURE OUTPUT (last 100 lines) ==="
+        if [ -s "$TEMP_LOG" ]; then
+            strip_ansi "$TEMP_LOG" | tail -100
+        else
+            echo "(no output captured)"
+        fi
+    } > .gemini_audit_input.txt
+
+    # Call the Gemini REST API using Python's stdlib — no external dependencies.
+    # The single-quoted heredoc delimiter (<<'PYEOF') prevents bash from
+    # expanding variables inside; the script reads GEMINI_API_KEY via os.environ.
+    local response
+    response=$(python3 - <<'PYEOF' 2>/dev/null
+import json, os, sys, urllib.request
+
+api_key = os.environ.get('GEMINI_API_KEY', '')
+if not api_key:
+    sys.exit(1)
+
+with open('.gemini_audit_input.txt') as f:
+    context = f.read()
+
+prompt = (
+    "You are a senior software architect performing a cross-model code audit. "
+    "Claude Code attempted a task and failed or timed out. Review the context "
+    "below and provide:\n\n"
+    "1. ROOT CAUSE: Why did Claude likely fail or get stuck?\n"
+    "2. CORRECTIVE STRATEGY: Concrete steps the next attempt should take.\n"
+    "3. PITFALLS: Specific mistakes to avoid on the retry.\n\n"
+    "Be concise and directly actionable — your advice will be prepended to "
+    "Claude's next attempt prompt.\n\n"
+    + context
+)
+
+payload = json.dumps({
+    'contents': [{'parts': [{'text': prompt}]}],
+    'generationConfig': {'maxOutputTokens': 1024, 'temperature': 0.3}
+}).encode()
+
+url = (
+    'https://generativelanguage.googleapis.com/v1beta/models/'
+    'gemini-2.5-flash:generateContent?key=' + api_key
+)
+req = urllib.request.Request(
+    url, data=payload, headers={'Content-Type': 'application/json'}
+)
+try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read())
+    print(data['candidates'][0]['content']['parts'][0]['text'])
+except Exception:
+    sys.exit(1)
+PYEOF
+    )
+
+    if [ -n "$response" ]; then
+        printf '%s\n' "$response" > GEMINI_ADVICE.md
+        GEMINI_ADVICE_TEXT="$response"
+        echo "✅ Gemini audit complete. Recommendation saved to GEMINI_ADVICE.md"
+        return 0
+    else
+        echo "⚠️  Gemini audit returned no response — continuing without advice."
+        GEMINI_ADVICE_TEXT=""
+        return 1
+    fi
+}
+
+# Prepends Gemini advice to a base prompt string and prints the result.
+# Called to build TASK_PROMPT before each retry attempt.
+# Usage: TASK_PROMPT=$(build_prompt_with_advice "$BASE_TASK")
+build_prompt_with_advice() {
+    local base="$1"
+    if [ -n "${GEMINI_ADVICE_TEXT:-}" ]; then
+        printf '=== GEMINI ARCHITECT ADVICE (from previous failed attempt) ===\n%s\n=== END ADVICE ===\n\n%s' \
+            "$GEMINI_ADVICE_TEXT" "$base"
+    else
+        printf '%s' "$base"
+    fi
+}
+
+# ==============================================================================
+# PRE-FLIGHT: CLAUDE.md BOOTSTRAP
+# Runs before the main retry loop. Failures are non-fatal — the main task
+# proceeds regardless. .claude/ is always wiped after the setup run so the
+# main task begins with a clean session (no stale setup context).
+# ==============================================================================
+if [ ! -f "CLAUDE.md" ]; then
+    bootstrap_claude_md || true
+fi
+
+# ==============================================================================
+# MAIN RETRY LOOP
+#
+# BASE_TASK tracks the "content" of the prompt (original task, or handoff +
+# original after a B+C reset). TASK_PROMPT = Gemini advice + BASE_TASK, rebuilt
+# each recovery cycle. Keeping them separate prevents advice blocks from stacking
+# across multiple Strategy A compaction retries.
+# ==============================================================================
+BASE_TASK="$ORIGINAL_TASK_PROMPT"
+TASK_PROMPT="$BASE_TASK"
+ATTEMPT=1
+SUCCESS=false
+SESSION_STARTED=false
+
 while [ $ATTEMPT -le $MAX_RETRIES ]; do
     echo "🚀 [Attempt $ATTEMPT/$MAX_RETRIES] Launching $CHOSEN_MODEL..."
     echo "⏳ Context: ${MAX_CONTEXT_TOKENS} | Thinking: ${MAX_THINKING_TOKENS} | Timeout: ${MAX_MINUTES}m"
+    if [ "$GEMINI_ENABLED" = true ]; then
+        echo "   Gemini audit: enabled (GEMINI_API_KEY set)"
+    else
+        echo "   Gemini audit: disabled"
+    fi
 
     set +e
     if [ "$SESSION_STARTED" = true ] && [ -d ".claude" ]; then
         # Our own previous attempt created a session — resume from it.
-        # We check SESSION_STARTED to avoid accidentally picking up a .claude/
-        # directory from a completely different prior task in the same directory.
+        # SESSION_STARTED guards against accidentally picking up a .claude/
+        # directory left by a completely different prior task.
         echo "📥 Resuming from existing session..."
         timeout "${MAX_MINUTES}m" "${DOCKER_RUN_BASE[@]}" claude --continue \
             --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "$TASK_PROMPT" \
@@ -221,31 +424,27 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
             --dangerously-skip-permissions --model "$CHOSEN_MODEL" -p "$TASK_PROMPT" \
             2>&1 | tee "$TEMP_LOG"
     fi
-    # PIPESTATUS[0] captures the exit code of the docker/timeout command, not tee.
-    # Using plain $? here would give tee's exit code instead, which is almost always 0.
+    # PIPESTATUS[0] captures the docker/timeout exit code, not tee's (which is
+    # almost always 0 and would mask real failures).
     EXIT_CODE=${PIPESTATUS[0]}
-    SESSION_STARTED=true   # A session now exists on disk (even if the run failed)
+    SESSION_STARTED=true
     set -e
 
     if [ $EXIT_CODE -eq 0 ]; then
         echo "✅ Task completed successfully on attempt $ATTEMPT."
-        rm -f ".task_handoff.md"   # Clean up any checkpoint from a prior failed attempt
+        rm -f ".task_handoff.md" "GEMINI_ADVICE.md"
         SUCCESS=true
         break
     fi
 
     # ===========================================================================
     # RATE LIMIT DETECTION
-    # Claude Pro emits a message like "try again after 14:00" or "resume at 2:00 PM"
-    # when the token quota is exhausted. We parse the reset time, sleep it out with
-    # a 5-minute safety buffer, then resume the same attempt.
-    #
-    # Crucially, rate-limit waits use `continue` to jump back to the top of the
-    # while loop WITHOUT incrementing ATTEMPT — so they don't consume a retry slot.
+    # Claude Pro emits a message like "try again after 14:00" when the token quota
+    # is exhausted. We parse the reset time, sleep with a 5-minute safety buffer,
+    # then resume. Rate-limit waits use `continue` to jump back to the top WITHOUT
+    # incrementing ATTEMPT — they do not consume a retry slot.
     # ===========================================================================
     if strip_ansi "$TEMP_LOG" | grep -qi "after [0-9]\{1,2\}:[0-9]\{2\}"; then
-        # Extract the time string; tail -1 takes the last match in case there are several.
-        # Handles both 24-hour ("14:00") and 12-hour ("2:00 PM") formats via optional AM/PM.
         TARGET_TIME=$(strip_ansi "$TEMP_LOG" \
             | grep -oi "after [0-9]\{1,2\}:[0-9]\{2\}\( *[AaPp][Mm]\)\?" \
             | tail -1 \
@@ -254,21 +453,16 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
 
         echo "🛑 [RATE LIMIT] Quota exhausted. Claude reported reset time: $TARGET_TIME"
 
-        # Resolve the clock time to an epoch timestamp. If the time has already passed
-        # today (e.g., the reset is just after midnight), advance to tomorrow.
         TARGET_EPOCH=$(date -d "$TARGET_TIME" +%s 2>/dev/null \
             || date -d "today $TARGET_TIME" +%s)
         NOW_EPOCH=$(date +%s)
-        if [ "$TARGET_EPOCH" -lt "$NOW_EPOCH" ]; then
+        [ "$TARGET_EPOCH" -lt "$NOW_EPOCH" ] && \
             TARGET_EPOCH=$(date -d "tomorrow $TARGET_TIME" +%s)
-        fi
         TARGET_EPOCH=$(( TARGET_EPOCH + 300 ))   # 5-minute safety buffer
         TARGET_DISPLAY=$(date -d "@$TARGET_EPOCH" '+%H:%M:%S')
 
         docker kill "$CONTAINER_NAME" 2>/dev/null || true
         wait_for_quota "$TARGET_EPOCH" "$TARGET_DISPLAY"
-
-        # Resume the same attempt number — rate limit waits are not retry failures.
         continue
     fi
 
@@ -279,56 +473,67 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
     fi
 
     # ===========================================================================
-    # RECOVERY PHASE — Three-strategy context management, in priority order.
-    # Goal: next attempt runs on condensed context, not the full failed history.
+    # RECOVERY PHASE
     #
-    # Strategy A (primary): Pipe /compact via stdin (no TTY) to invoke Claude
-    #   Code's built-in slash command. Verified by measuring .claude/ size before
-    #   and after — exit 0 alone is insufficient, the file must actually shrink.
+    # On any non-rate-limit failure:
     #
-    # Strategy B+C (combined fallback): Use --continue to ask Claude to write a
-    #   .task_handoff.md checkpoint while it can still see its full history, then
-    #   wipe .claude/ entirely. The handoff file survives in the workspace volume.
-    #   Next attempt starts fresh but gets the checkpoint injected into the prompt.
-    #   This avoids dragging a bloated failed context into the next run.
+    #   Gemini Audit (pre-flight, if enabled):
+    #     Sends failure context to Gemini 2.5 Flash for architectural advice.
+    #     Sets GEMINI_ADVICE_TEXT. Non-fatal: recovery continues if API fails.
+    #
+    #   Strategy A (primary):
+    #     Pipes /compact to Claude Code's built-in slash command. Verifies by
+    #     measuring .claude/ size before and after — exit 0 alone is insufficient.
+    #     On success, rebuilds TASK_PROMPT with Gemini advice prepended to BASE_TASK.
+    #
+    #   Strategy B+C (fallback):
+    #     B — Run one final --continue pass asking Claude to write a checkpoint
+    #         (.task_handoff.md) while it can still see its full history.
+    #     C — Wipe .claude/ entirely. The handoff file survives in the workspace
+    #         volume. Next attempt starts fresh but gets the checkpoint + Gemini
+    #         advice injected into its prompt.
     # ===========================================================================
     if [ $ATTEMPT -lt $MAX_RETRIES ]; then
         docker kill "$CONTAINER_NAME" 2>/dev/null || true
         sleep 2
 
+        # --- GEMINI CROSS-MODEL AUDIT (pre-flight before recovery strategies) ---
+        if [ "$GEMINI_ENABLED" = true ]; then
+            run_gemini_audit || true   # non-fatal; recovery continues either way
+        fi
+
         echo "🧹 [RECOVERY] Attempting context compaction (Strategy A)..."
 
-        # Snapshot .claude/ size before the compaction attempt
+        # Snapshot .claude/ size before the compaction attempt.
         BEFORE_SIZE=0
         [ -d ".claude" ] && BEFORE_SIZE=$(du -sk ".claude" 2>/dev/null | cut -f1 || echo "0")
 
         # Strategy A: /compact is a Claude Code slash command that summarises the
-        # conversation history in-place and rewrites .claude/ on the shared volume.
-        # Without -t (no TTY), the CLI reads stdin directly; piping the command in
-        # triggers the same compaction path as typing /compact interactively.
-        # DOCKER_RECOVERY_BASE is used here (not DOCKER_RUN_BASE) since these
-        # are automated passes with no user PTY attached.
+        # conversation history in-place. Without -t (no TTY), the CLI reads stdin
+        # directly; piping the command triggers the same compaction path as typing
+        # /compact interactively.
         set +e
         printf '/compact\n' | timeout "3m" "${DOCKER_RECOVERY_BASE[@]}" \
             claude --continue --dangerously-skip-permissions --model "$CHOSEN_MODEL"
         COMPACT_CODE=$?
         set -e
 
-        # Verify compaction actually shrank the session — exit 0 alone isn't enough.
         AFTER_SIZE=0
         [ -d ".claude" ] && AFTER_SIZE=$(du -sk ".claude" 2>/dev/null | cut -f1 || echo "0")
 
         if [ $COMPACT_CODE -eq 0 ] && [ "${AFTER_SIZE}" -lt "${BEFORE_SIZE}" ]; then
             echo "✅ Strategy A: session compacted ${BEFORE_SIZE}K → ${AFTER_SIZE}K."
             echo "   Next attempt resumes via --continue from the condensed session."
+            # Prepend Gemini advice to BASE_TASK so the resumed session benefits.
+            TASK_PROMPT=$(build_prompt_with_advice "$BASE_TASK")
+            [ -n "${GEMINI_ADVICE_TEXT:-}" ] && echo "   Gemini advice injected into next attempt prompt."
         else
             echo "⚠️  Strategy A ineffective (${BEFORE_SIZE}K → ${AFTER_SIZE}K, exit ${COMPACT_CODE})."
             echo "   Running Strategy B+C: handoff capture then context reset..."
 
             # Strategy B: Run one final --continue pass asking Claude to write a
-            # checkpoint file. The workspace is a mounted volume so the file
-            # survives container teardown even after we wipe .claude/ in step C.
-            # Uses DOCKER_RECOVERY_BASE (no -t) since this is an automated pass.
+            # checkpoint. The workspace volume ensures the file survives even after
+            # we wipe .claude/ in step C.
             set +e
             timeout "2m" "${DOCKER_RECOVERY_BASE[@]}" claude --continue \
                 --dangerously-skip-permissions --model "$CHOSEN_MODEL" \
@@ -338,25 +543,27 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
 
             # Strategy C: Wipe the bloated failed session. Carrying a full failed
             # history into the next attempt wastes tokens and biases reasoning.
-            # The handoff file is the only context we want to preserve.
             echo "🗑️  Resetting session context (handoff file preserved in workspace)..."
             rm -rf .claude/
             SESSION_STARTED=false   # Next iteration must start fresh, not --continue
 
-            # Inject the handoff into the next attempt's task prompt.
-            # Always wrap ORIGINAL_TASK_PROMPT (not the mutated TASK_PROMPT) so
-            # repeated B+C cycles don't nest "Context from previous session:" blocks.
+            # Build the new BASE_TASK from the handoff (if captured), then inject
+            # Gemini advice on top. Always wrap ORIGINAL_TASK_PROMPT (not BASE_TASK)
+            # so repeated B+C cycles never nest "Context from previous session:" blocks.
             if [ $HANDOFF_CODE -eq 0 ] && [ -f ".task_handoff.md" ]; then
                 HANDOFF_CONTEXT=$(cat ".task_handoff.md")
-                TASK_PROMPT="Context from previous session:
+                BASE_TASK="Context from previous session:
 ${HANDOFF_CONTEXT}
 
 Continue the original task: ${ORIGINAL_TASK_PROMPT}"
-                echo "✅ Strategy B+C: handoff captured, session wiped, context injected into next prompt."
+                echo "✅ Strategy B+C: handoff captured, session wiped."
             else
-                echo "⚠️  Handoff write failed (exit ${HANDOFF_CODE}). Starting clean from original task."
-                TASK_PROMPT="$ORIGINAL_TASK_PROMPT"
+                echo "⚠️  Handoff write failed (exit ${HANDOFF_CODE}). Starting from original task."
+                BASE_TASK="$ORIGINAL_TASK_PROMPT"
             fi
+
+            TASK_PROMPT=$(build_prompt_with_advice "$BASE_TASK")
+            [ -n "${GEMINI_ADVICE_TEXT:-}" ] && echo "   Gemini advice injected into next attempt prompt."
         fi
 
         sleep 3
@@ -366,6 +573,9 @@ Continue the original task: ${ORIGINAL_TASK_PROMPT}"
 done
 
 if [ "$SUCCESS" = false ]; then
-    echo "❌ [FATAL ERROR] Task execution failed to resolve after $MAX_RETRIES allocation attempts."
+    echo "❌ [FATAL ERROR] Task execution failed to resolve after $MAX_RETRIES attempts."
+    if [ "$GEMINI_ENABLED" = true ] && [ -f "GEMINI_ADVICE.md" ]; then
+        echo "💡 Gemini's last audit is saved in GEMINI_ADVICE.md for your review."
+    fi
     exit 1
 fi
