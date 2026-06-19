@@ -162,42 +162,6 @@ DOCKER_RECOVERY_BASE=(
 # (strip_ansi, wait_for_quota, build_prompt_with_advice are in lib/launch-lib.sh)
 # ==============================================================================
 
-# Run a one-shot headless claude call to create CLAUDE.md. Isolated from the
-# main retry loop so setup failures don't consume retry slots or corrupt
-# recovery state. Retries once. Always wipes .claude/ on exit so the main
-# task starts from a clean session.
-bootstrap_claude_md() {
-    echo "⚠️  [CONTEXT WARNING] CLAUDE.md not found in repository root."
-    echo "🤖 Generating CLAUDE.md blueprint before starting the main task..."
-
-    local setup_prompt="Analyze this codebase and create a CLAUDE.md file in the root directory. Follow standard Claude Code conventions: project purpose, exact build/test/lint commands, file layout, and engineering/style guidelines for this tech stack. Do not perform any other tasks."
-
-    local attempt
-    for attempt in 1 2; do
-        echo "   [CLAUDE.md Setup] Attempt $attempt/2..."
-        set +e
-        timeout "5m" "${DOCKER_RECOVERY_BASE[@]}" \
-            claude --dangerously-skip-permissions --model "$CHOSEN_MODEL" \
-            -p "$setup_prompt"
-        local exit_code=$?
-        set -e
-
-        # Always wipe setup session context so the main task starts clean.
-        rm -rf .claude/ 2>/dev/null || true
-
-        if [ $exit_code -eq 0 ] && [ -f "CLAUDE.md" ]; then
-            echo "✅ CLAUDE.md created."
-            return 0
-        fi
-        if [ $attempt -lt 2 ]; then
-            echo "   Setup attempt $attempt failed, retrying..."
-        else
-            echo "⚠️  CLAUDE.md setup failed after 2 attempts. Proceeding without it."
-        fi
-    done
-    return 1
-}
-
 # ==============================================================================
 # GEMINI CROSS-MODEL AUDIT
 #
@@ -274,14 +238,12 @@ run_gemini_audit() {
 }
 
 # ==============================================================================
-# PRE-FLIGHT: CLAUDE.md BOOTSTRAP
-# Runs before the main retry loop. Failures are non-fatal — the main task
-# proceeds regardless. .claude/ is always wiped after the setup run so the
-# main task begins with a clean session (no stale setup context).
+# PRE-FLIGHT: CLAUDE.md BOOTSTRAP / REFRESH
+# Ensures CLAUDE.md exists and reflects recent git changes before the main task
+# and any Gemini audit. Failures are non-fatal — the main task proceeds with
+# whatever context is available. .claude/ is wiped by run_headless_phase.
 # ==============================================================================
-if [ ! -f "CLAUDE.md" ]; then
-    bootstrap_claude_md || true
-fi
+ensure_claude_md_current "${CONTAINER_NAME}-setup"
 
 # ==============================================================================
 # MAIN RETRY LOOP

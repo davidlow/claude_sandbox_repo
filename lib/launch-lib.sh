@@ -146,6 +146,63 @@ run_headless_phase() {
 }
 
 # ---------------------------------------------------------------------------
+# ensure_claude_md_current <container_name> [model]
+# Ensures CLAUDE.md exists and reflects recent git commits before a Gemini call.
+#
+# Two scenarios trigger an update:
+#   1. CLAUDE.md is absent          → creates it from scratch
+#   2. CLAUDE.md is older than the  → refreshes it to capture recent changes
+#      most recent git commit
+#
+# The refresh prompt is scoped to CLAUDE.md updates only — Claude is explicitly
+# told not to make any other code changes. This function never calls Gemini, so
+# it cannot cause a Gemini→update→Gemini infinite loop.
+#
+# Requires OAUTH_TOKEN and OAUTH_REFRESH to be set in the environment (uses
+# run_headless_phase). Non-fatal: failures are logged and the caller proceeds
+# with whatever context is available.
+# ---------------------------------------------------------------------------
+ensure_claude_md_current() {
+    local container_name="${1:-claude-md-refresh-$$}"
+    local model="${2:-claude-haiku-4-5}"
+
+    local needs_create=false
+    local needs_update=false
+
+    if [ ! -f "CLAUDE.md" ]; then
+        needs_create=true
+    elif git rev-parse --git-dir >/dev/null 2>&1; then
+        local last_commit_ts claude_md_ts
+        last_commit_ts=$(git log -1 --format=%ct 2>/dev/null || echo "0")
+        claude_md_ts=$(stat -c %Y CLAUDE.md 2>/dev/null || echo "0")
+        if [ "$last_commit_ts" -gt "$claude_md_ts" ]; then
+            needs_update=true
+        fi
+    fi
+
+    if [ "$needs_create" = false ] && [ "$needs_update" = false ]; then
+        return 0
+    fi
+
+    local prompt
+    if [ "$needs_create" = true ]; then
+        echo "⚠️  CLAUDE.md not found. Generating before Gemini call..."
+        prompt="Analyze this codebase and create a CLAUDE.md file in the root directory. Follow standard Claude Code conventions: project purpose, exact build/test/lint commands, file layout, and engineering/style guidelines for this tech stack. Do not perform any other tasks."
+    else
+        echo "📋 CLAUDE.md is older than the latest commit — refreshing before Gemini call..."
+        prompt="Your ONLY task is to update the existing CLAUDE.md file to reflect recent changes in this codebase. Run 'git log --oneline -20' to see what has changed recently. Review the current CLAUDE.md and update any sections that are now outdated — focus on new or removed files, changed commands, and modified architecture. Preserve the existing structure and style. Do NOT make any other code changes."
+    fi
+
+    run_headless_phase "$container_name" "$model" "5" "$prompt" || true
+
+    if [ -f "CLAUDE.md" ]; then
+        echo "✅ CLAUDE.md is current."
+    else
+        echo "⚠️  CLAUDE.md refresh failed. Proceeding without it."
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Gemini model priority lists — ordered by preference within each tier.
 #
 # Flash models handle real problems (newest/most capable first).

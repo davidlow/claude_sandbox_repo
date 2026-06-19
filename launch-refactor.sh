@@ -117,14 +117,9 @@ echo ""
 DIFF_FILE=".current_state.diff"
 git diff > "$DIFF_FILE" 2>/dev/null || true
 
-# CLAUDE.md bootstrap before Phase 1 if absent.
-if [ ! -f "CLAUDE.md" ]; then
-    echo "⚠️  CLAUDE.md not found. Generating before pipeline..."
-    run_headless_phase "${BASE_CONTAINER}-setup" "$DIAGNOSE_MODEL" "5" \
-        "Analyze this codebase and create a CLAUDE.md file in the root directory. Follow standard Claude Code conventions: project purpose, exact build/test/lint commands, file layout, and engineering/style guidelines. Do not perform any other tasks." || true
-    [ -f "CLAUDE.md" ] && echo "✅ CLAUDE.md created." || echo "⚠️  CLAUDE.md creation failed. Continuing."
-    echo ""
-fi
+# Ensure CLAUDE.md exists and is current before Phase 1 and the Gemini audit.
+ensure_claude_md_current "${BASE_CONTAINER}-setup"
+echo ""
 
 # ==============================================================================
 # PHASE 1: DIAGNOSE (haiku)
