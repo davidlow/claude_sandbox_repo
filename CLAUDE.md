@@ -96,3 +96,8 @@ Every container run bind-mounts two paths:
 - Recovery strategies are labeled A/B/C in comments throughout `launch-scripted.sh` — keep this convention when adding strategies.
 - `GEMINI_ADVICE.md` is intentionally left on disk after a final failure for user review; it is cleaned up on success.
 - `.claude/` and `claude-auth/` are git-ignored; never commit OAuth credentials or session state.
+
+## Development Practices
+
+- **Testing**: Write tests for new functionality. Unit tests live in `tests/test_*.sh` and must pass with `./tests/run_tests.sh --unit` before committing.
+- **Commits**: Make small, logical commits — one coherent change per commit. Not so granular that every line is separate, but not giant all-in-one commits either. Each commit should represent a single meaningful unit of work that leaves the repo in a working state.
