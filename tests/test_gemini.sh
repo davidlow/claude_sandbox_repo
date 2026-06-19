@@ -7,6 +7,11 @@
 #   - All three build_gemini_*_prompt functions produce usable prompts
 #   - Error paths return non-zero without crashing
 #
+# Model tier: when run via run_tests.sh (--gemini or default), GEMINI_MODEL_TIER
+# is set to "lite" so tests use the lite models (gemini-3.1-flash-lite first)
+# to preserve free-tier quota.  To test flash models explicitly:
+#   GEMINI_MODEL_TIER=flash ./tests/run_tests.sh --gemini
+#
 # Network access required; no Docker needed.
 set -eo pipefail
 
@@ -28,6 +33,7 @@ if [ -z "${GEMINI_API_KEY:-}" ]; then
     exit 0
 fi
 echo "  ✅ GEMINI_API_KEY is set"
+echo "  ℹ️  Model tier: ${GEMINI_MODEL_TIER:-flash} (override with GEMINI_MODEL_TIER=lite|flash)"
 TEST_PASS=$(( TEST_PASS + 1 ))
 
 # ---------------------------------------------------------------------------

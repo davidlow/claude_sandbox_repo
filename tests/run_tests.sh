@@ -102,8 +102,10 @@ case "$MODE" in
         for t in "${SECURITY_TESTS[@]}"; do run_file "$t"; done
         ;;
     --gemini)
-        echo "Mode: Gemini API integration tests (GEMINI_API_KEY required)"
+        echo "Mode: Gemini API integration tests (GEMINI_API_KEY required, lite models)"
+        export GEMINI_MODEL_TIER="lite"
         for t in "${GEMINI_TESTS[@]}"; do run_file "$t"; done
+        unset GEMINI_MODEL_TIER
         ;;
     --orchestration)
         echo "Mode: pipeline orchestration tests (Docker required, builds mock image)"
@@ -118,7 +120,9 @@ case "$MODE" in
         for t in "${UNIT_TESTS[@]}";        do run_file "$t"; done
         for t in "${INTEGRATION_TESTS[@]}"; do run_file "$t"; done
         for t in "${SECURITY_TESTS[@]}";    do run_file "$t"; done
+        export GEMINI_MODEL_TIER="lite"
         for t in "${GEMINI_TESTS[@]}";      do run_file "$t"; done
+        unset GEMINI_MODEL_TIER
         for t in "${ORCHESTRATION_TESTS[@]}"; do run_file "$t"; done
         ;;
 esac

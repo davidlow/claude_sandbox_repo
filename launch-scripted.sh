@@ -201,9 +201,10 @@ bootstrap_claude_md() {
 # ==============================================================================
 # GEMINI CROSS-MODEL AUDIT
 #
-# Sends failure context to Gemini 2.5 Flash for architectural advice. Writes
-# the recommendation to GEMINI_ADVICE.md and sets GEMINI_ADVICE_TEXT so the
-# main loop can inject it into the next attempt's prompt.
+# Sends failure context to Gemini for architectural advice using flash models
+# (with automatic fallback through the model tier list in launch-lib.sh).
+# Writes the recommendation to GEMINI_ADVICE.md and sets GEMINI_ADVICE_TEXT
+# so the main loop can inject it into the next attempt's prompt.
 #
 # Disabled when:
 #   - --no-gemini flag was passed
@@ -219,7 +220,7 @@ run_gemini_audit() {
     echo "🧠 [GEMINI AUDIT] Sending failure context for cross-model analysis..."
 
     # Build audit context: task objective + repo blueprint + diff + failure log.
-    # Git diff is capped at 200 lines to stay within Gemini's input window.
+    # Git diff is capped at 500 lines to stay within Gemini's input window.
     {
         echo "=== TASK OBJECTIVE ==="
         echo "$ORIGINAL_TASK_PROMPT"
@@ -244,61 +245,30 @@ run_gemini_audit() {
         fi
     } > .gemini_audit_input.txt
 
-    # Call the Gemini REST API using Python's stdlib — no external dependencies.
-    # The single-quoted heredoc delimiter (<<'PYEOF') prevents bash from
-    # expanding variables inside; the script reads GEMINI_API_KEY via os.environ.
-    local response
-    response=$(python3 - <<'PYEOF' 2>/dev/null
-import json, os, sys, urllib.request
+    # Prepend the cross-model audit framing to the raw context, then hand off
+    # to call_gemini which handles model selection and fallback automatically.
+    local audit_prompt_file
+    audit_prompt_file=$(mktemp)
+    {
+        printf '%s\n\n' \
+            "You are a senior software architect performing a cross-model code audit. Claude Code attempted a task and failed or timed out. Review the context below and provide:" \
+            "1. ROOT CAUSE: Why did Claude likely fail or get stuck?" \
+            "2. CORRECTIVE STRATEGY: Concrete steps the next attempt should take." \
+            "3. PITFALLS: Specific mistakes to avoid on the retry." \
+            "Be concise and directly actionable — your advice will be prepended to Claude's next attempt prompt."
+        cat .gemini_audit_input.txt
+    } > "$audit_prompt_file"
+    rm -f .gemini_audit_input.txt
 
-api_key = os.environ.get('GEMINI_API_KEY', '')
-if not api_key:
-    sys.exit(1)
-
-with open('.gemini_audit_input.txt') as f:
-    context = f.read()
-
-prompt = (
-    "You are a senior software architect performing a cross-model code audit. "
-    "Claude Code attempted a task and failed or timed out. Review the context "
-    "below and provide:\n\n"
-    "1. ROOT CAUSE: Why did Claude likely fail or get stuck?\n"
-    "2. CORRECTIVE STRATEGY: Concrete steps the next attempt should take.\n"
-    "3. PITFALLS: Specific mistakes to avoid on the retry.\n\n"
-    "Be concise and directly actionable — your advice will be prepended to "
-    "Claude's next attempt prompt.\n\n"
-    + context
-)
-
-payload = json.dumps({
-    'contents': [{'parts': [{'text': prompt}]}],
-    'generationConfig': {'maxOutputTokens': 4096, 'temperature': 0.3}
-}).encode()
-
-url = (
-    'https://generativelanguage.googleapis.com/v1beta/models/'
-    'gemini-2.5-flash-lite:generateContent?key=' + api_key
-)
-req = urllib.request.Request(
-    url, data=payload, headers={'Content-Type': 'application/json'}
-)
-try:
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read())
-    print(data['candidates'][0]['content']['parts'][0]['text'])
-except Exception:
-    sys.exit(1)
-PYEOF
-    )
-
-    if [ -n "$response" ]; then
-        printf '%s\n' "$response" > GEMINI_ADVICE.md
-        GEMINI_ADVICE_TEXT="$response"
+    if call_gemini "$audit_prompt_file" "GEMINI_ADVICE.md"; then
+        GEMINI_ADVICE_TEXT=$(cat "GEMINI_ADVICE.md")
         echo "✅ Gemini audit complete. Recommendation saved to GEMINI_ADVICE.md"
+        rm -f "$audit_prompt_file"
         return 0
     else
         echo "⚠️  Gemini audit returned no response — continuing without advice."
         GEMINI_ADVICE_TEXT=""
+        rm -f "$audit_prompt_file"
         return 1
     fi
 }

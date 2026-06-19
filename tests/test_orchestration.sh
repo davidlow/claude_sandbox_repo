@@ -219,45 +219,17 @@ suite "launch-architect.sh — Phase 2 failure exits with error"
 
 ARCH_FAIL_WS=$(mktemp -d)
 ARCH_FAIL_HOME=$(make_mock_home)
-# Use MOCK_CLAUDE_EXIT=1 to make the mock claude fail for Phase 2.
-# But Phase 1 must succeed.  We'll use a wrapper that fails on the second call.
+trap 'rm -rf "$ARCH_FAIL_WS" "$ARCH_FAIL_HOME"' RETURN
 
-CALL_COUNT_FILE=$(mktemp)
-printf '0' > "$CALL_COUNT_FILE"
-
-MOCK_COUNTED=$(mktemp)
-cat > "$MOCK_COUNTED" << WRAPPER
-#!/bin/bash
-COUNT=\$(cat "$CALL_COUNT_FILE")
-COUNT=\$(( COUNT + 1 ))
-printf '%d' "\$COUNT" > "$CALL_COUNT_FILE"
-# Fail on Phase 2 (second real call) and its retry (third call)
-# Phase calls: 1=setup(CLAUDE.md), 2=phase1, 3=phase2, 4=phase2-retry
-if [ "\$COUNT" -ge 3 ]; then
-    exit 1
-fi
-# Delegate to the real mock for Phase 1 output
-PREV=""
-for arg in "\$@"; do
-    if [ "\$PREV" = "-p" ]; then
-        PROMPT="\$arg"
-    fi
-    PREV="\$arg"
-done
-if echo "\$PROMPT" | grep -q "architecture_candidates.md"; then
-    mkdir -p /workspace/docs
-    echo "## Option A\n## Option B\n## Option C" > /workspace/docs/architecture_candidates.md
-fi
-exit 0
-WRAPPER
-chmod +x "$MOCK_COUNTED"
-trap 'rm -rf "$ARCH_FAIL_WS" "$ARCH_FAIL_HOME"; rm -f "$CALL_COUNT_FILE" "$MOCK_COUNTED"' RETURN
-
+# MOCK_CLAUDE_EXIT=1 propagates into the mock container via run_headless_phase.
+# mock-claude.sh skips writing output files when EXIT_CODE != 0, so both Phase 1
+# and Phase 2 produce no output files.  Phase 1 failure is non-fatal (the pipeline
+# continues with a warning); Phase 2 failure causes the pipeline to exit 1.
 set +e
 ARCH_FAIL_OUT=$(cd "$ARCH_FAIL_WS" && \
     HOME="$ARCH_FAIL_HOME" \
     CLAUDE_SANDBOX_IMAGE=claude-sandbox-mock \
-    LAUNCH_SCRIPTED_OVERRIDE="$(make_mock_scripted)" \
+    MOCK_CLAUDE_EXIT=1 \
     bash "$REPO_DIR/launch-architect.sh" "add feature" --no-gemini 2>&1)
 ARCH_FAIL_RC=$?
 set -e
@@ -271,7 +243,6 @@ if [ -n "$DL_FAIL_ARCH" ]; then
 fi
 
 rm -rf "$ARCH_FAIL_WS" "$ARCH_FAIL_HOME"
-rm -f "$CALL_COUNT_FILE" "$MOCK_COUNTED"
 
 # ---------------------------------------------------------------------------
 suite "launch-refactor.sh — full orchestration with mock Docker"

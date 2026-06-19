@@ -119,6 +119,10 @@ run_headless_phase() {
 
     parse_model_tier "$model"
 
+    # Pass MOCK_CLAUDE_EXIT into the container when set (used by mock image in tests).
+    local extra_docker_env=()
+    [ -n "${MOCK_CLAUDE_EXIT:-}" ] && extra_docker_env+=(-e "MOCK_CLAUDE_EXIT=$MOCK_CLAUDE_EXIT")
+
     local exit_code=0
     (
         set +e
@@ -132,6 +136,7 @@ run_headless_phase() {
             -e CLAUDE_CODE_MAX_CONTEXT_TOKENS="$MAX_CONTEXT_TOKENS" \
             -e API_TARGET_INPUT_TOKENS="$TARGET_INPUT_TOKENS" \
             -e MAX_THINKING_TOKENS="$MAX_THINKING_TOKENS" \
+            "${extra_docker_env[@]}" \
             "${CLAUDE_SANDBOX_IMAGE:-claude-sandbox}" \
             claude --dangerously-skip-permissions --model "$model" -p "$prompt"
     ) || exit_code=$?
@@ -141,23 +146,78 @@ run_headless_phase() {
 }
 
 # ---------------------------------------------------------------------------
+# Gemini model priority lists — ordered by preference within each tier.
+#
+# Flash models handle real problems (newest/most capable first).
+# Lite models are used when GEMINI_MODEL_TIER=lite (test runs) or as a
+# last-resort fallback when all flash models are rate-limited.
+# ---------------------------------------------------------------------------
+_GEMINI_FLASH_MODELS=(
+    "gemini-3.5-flash"
+    "gemini-3-flash"
+    "gemini-2.5-flash"
+)
+_GEMINI_LITE_MODELS=(
+    "gemini-3.1-flash-lite"
+    "gemini-2.5-flash-lite"
+)
+
+# ---------------------------------------------------------------------------
 # call_gemini <prompt_file> <output_file>
-# Reads the full prompt from prompt_file, calls Gemini 2.5 Flash, and writes
-# the response text to output_file.
+# Reads the full prompt from prompt_file, calls the Gemini API with automatic
+# model fallback, and writes the response text to output_file.
+#
+# Model selection is controlled by the GEMINI_MODEL_TIER environment variable:
+#   flash (default): tries flash models in order (3.5→3→2.5), then falls back
+#                    to lite models if all flash models are rate-limited (429).
+#                    A warning is printed to stderr when the lite fallback fires.
+#   lite:            uses only lite models (3.1-flash-lite→2.5-flash-lite).
+#                    Set this for test runs to minimise free-tier quota pressure:
+#                    GEMINI_MODEL_TIER=lite ./tests/run_tests.sh --gemini
+#
+# On HTTP 429 (rate limit), the current model is retried up to 3 times with
+# exponential back-off; if retries are exhausted the next model in the list is
+# tried. Any other HTTP error causes an immediate failure (no model switching).
+#
 # Reads GEMINI_API_KEY from the environment.
-# Returns 0 on success, 1 on failure (API error, missing key, empty response).
+# Returns 0 on success, 1 on failure (API error, missing key, all models
+# exhausted, empty response).
 # ---------------------------------------------------------------------------
 call_gemini() {
     local prompt_file="$1"
     local output_file="$2"
+    local tier="${GEMINI_MODEL_TIER:-flash}"
+
+    # Build ordered model list (newline-separated) and flash model count.
+    local models_env flash_count_env
+    if [ "$tier" = "lite" ]; then
+        models_env=$(printf '%s\n' "${_GEMINI_LITE_MODELS[@]}")
+        flash_count_env=0
+    else
+        models_env=$(printf '%s\n' "${_GEMINI_FLASH_MODELS[@]}" "${_GEMINI_LITE_MODELS[@]}")
+        flash_count_env="${#_GEMINI_FLASH_MODELS[@]}"
+    fi
+
+    # Warnings (e.g. lite fallback notice) are written to a temp file by Python
+    # and then printed to stderr by bash after the response is captured.
+    local warn_file
+    warn_file=$(mktemp)
 
     local response
-    response=$(GEMINI_PROMPT_FILE="$prompt_file" python3 - <<'PYEOF' 2>/dev/null
+    response=$(GEMINI_PROMPT_FILE="$prompt_file" \
+               GEMINI_MODELS="$models_env" \
+               GEMINI_FLASH_COUNT="$flash_count_env" \
+               GEMINI_WARN_FILE="$warn_file" \
+               python3 - <<'PYEOF' 2>/dev/null
 import json, os, sys, time, urllib.request, urllib.error
 
-api_key = os.environ.get('GEMINI_API_KEY', '')
-prompt_file = os.environ.get('GEMINI_PROMPT_FILE', '')
-if not api_key or not prompt_file:
+api_key      = os.environ.get('GEMINI_API_KEY', '')
+prompt_file  = os.environ.get('GEMINI_PROMPT_FILE', '')
+models       = [m for m in os.environ.get('GEMINI_MODELS', '').splitlines() if m]
+flash_count  = int(os.environ.get('GEMINI_FLASH_COUNT', '0'))
+warn_file    = os.environ.get('GEMINI_WARN_FILE', '')
+
+if not api_key or not prompt_file or not models:
     sys.exit(1)
 
 try:
@@ -171,30 +231,56 @@ payload = json.dumps({
     'generationConfig': {'maxOutputTokens': 8192, 'temperature': 0.3}
 }).encode()
 
-url = (
-    'https://generativelanguage.googleapis.com/v1beta/models/'
-    'gemini-2.5-flash-lite:generateContent?key=' + api_key
-)
-req = urllib.request.Request(
-    url, data=payload, headers={'Content-Type': 'application/json'}
-)
+def write_warn(msg):
+    if warn_file:
+        with open(warn_file, 'a') as wf:
+            wf.write(msg + '\n')
 
-# Retry up to 3 times with exponential back-off on rate-limit (HTTP 429).
-for attempt in range(3):
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read())
-        print(data['candidates'][0]['content']['parts'][0]['text'])
-        sys.exit(0)
-    except urllib.error.HTTPError as e:
-        if e.code == 429 and attempt < 2:
-            time.sleep(12 * (attempt + 1))  # 12 s, then 24 s
-            continue
-        sys.exit(1)
-    except Exception:
-        sys.exit(1)
+for idx, model in enumerate(models):
+    # Warn once when crossing from flash into lite fallback territory.
+    if flash_count > 0 and idx == flash_count:
+        write_warn(
+            f'⚠️  All flash Gemini models are rate-limited. '
+            f'Falling back to {model} (lite tier).\n'
+            '   Response quality may be lower. '
+            'Consider a GEMINI_API_KEY with higher quota limits.'
+        )
+
+    url = (
+        'https://generativelanguage.googleapis.com/v1beta/models/'
+        f'{model}:generateContent?key={api_key}'
+    )
+    req = urllib.request.Request(
+        url, data=payload, headers={'Content-Type': 'application/json'}
+    )
+
+    # Retry up to 3 times with exponential back-off on rate-limit (HTTP 429).
+    # Any other HTTP error fails immediately without trying further models.
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read())
+            print(data['candidates'][0]['content']['parts'][0]['text'])
+            sys.exit(0)
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                if attempt < 2:
+                    time.sleep(12 * (attempt + 1))  # 12 s, then 24 s
+                    continue
+                break  # 429 retries exhausted — try next model
+            sys.exit(1)  # non-429 error: fail immediately
+        except Exception:
+            sys.exit(1)
+
+sys.exit(1)  # all models exhausted
 PYEOF
     )
+
+    # Surface any warnings (lite fallback etc.) to the caller's stderr.
+    if [ -s "$warn_file" ]; then
+        cat "$warn_file" >&2
+    fi
+    rm -f "$warn_file"
 
     if [ -n "$response" ]; then
         printf '%s\n' "$response" > "$output_file"

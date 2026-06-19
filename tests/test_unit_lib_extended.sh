@@ -322,6 +322,25 @@ assert_contains "model flag passed to docker" "--model claude-haiku-4-5" "$MOCK_
 # run_headless_phase must pass --dangerously-skip-permissions
 assert_contains "permissions flag passed" "dangerously-skip-permissions" "$MOCK_CALLS"
 
+# With MOCK_CLAUDE_EXIT set, it must be forwarded as a docker -e flag
+> "$DOCKER_LOG"
+set +e
+CLAUDE_SANDBOX_IMAGE="claude-sandbox-mock" MOCK_CLAUDE_EXIT=1 \
+    run_headless_phase "test-container-3" "claude-haiku-4-5" "1" "echo test" 2>/dev/null
+set -e
+EXIT_CALLS=$(cat "$DOCKER_LOG")
+assert_contains "MOCK_CLAUDE_EXIT propagated to docker" "MOCK_CLAUDE_EXIT=1" "$EXIT_CALLS"
+
+# Without MOCK_CLAUDE_EXIT, it must NOT appear in the docker args
+> "$DOCKER_LOG"
+unset MOCK_CLAUDE_EXIT
+set +e
+CLAUDE_SANDBOX_IMAGE="claude-sandbox-mock" \
+    run_headless_phase "test-container-4" "claude-haiku-4-5" "1" "echo test" 2>/dev/null
+set -e
+NO_EXIT_CALLS=$(cat "$DOCKER_LOG")
+assert_not_contains "MOCK_CLAUDE_EXIT absent when unset" "MOCK_CLAUDE_EXIT" "$NO_EXIT_CALLS"
+
 PATH="$_SAVED_PATH"
 rm -f "$DOCKER_LOG"
 rm -rf "$MOCK_DOCKER_DIR"

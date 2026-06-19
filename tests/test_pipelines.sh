@@ -9,6 +9,29 @@ source "$TESTS_DIR/helpers.sh"
 source "$REPO_DIR/lib/launch-lib.sh"
 
 # ==============================================================================
+suite "call_gemini — model tier lists"
+# ==============================================================================
+
+FLASH_LIST=$(printf '%s\n' "${_GEMINI_FLASH_MODELS[@]}")
+assert_contains "flash tier: includes gemini-3.5-flash"  "gemini-3.5-flash"  "$FLASH_LIST"
+assert_contains "flash tier: includes gemini-3-flash"    "gemini-3-flash"    "$FLASH_LIST"
+assert_contains "flash tier: includes gemini-2.5-flash"  "gemini-2.5-flash"  "$FLASH_LIST"
+
+LITE_LIST=$(printf '%s\n' "${_GEMINI_LITE_MODELS[@]}")
+assert_contains "lite tier: includes gemini-3.1-flash-lite" "gemini-3.1-flash-lite" "$LITE_LIST"
+assert_contains "lite tier: includes gemini-2.5-flash-lite" "gemini-2.5-flash-lite" "$LITE_LIST"
+
+# Flash list must not overlap with lite list
+assert_not_contains "flash list has no lite entries" "flash-lite" "$FLASH_LIST"
+
+# Combined list should put flash models before lite models
+COMBINED=$(printf '%s\n' "${_GEMINI_FLASH_MODELS[@]}" "${_GEMINI_LITE_MODELS[@]}")
+FLASH_POS=$(printf '%s\n' "$COMBINED" | grep -n "gemini-3.5-flash$" | cut -d: -f1 | head -1)
+LITE_POS=$(printf '%s\n' "$COMBINED" | grep -n "gemini-3.1-flash-lite" | cut -d: -f1 | head -1)
+assert_equals "flash models precede lite models in fallback order" "true" \
+    "$([ "${FLASH_POS:-0}" -lt "${LITE_POS:-99}" ] && echo true || echo false)"
+
+# ==============================================================================
 suite "call_gemini — API key guard"
 # ==============================================================================
 

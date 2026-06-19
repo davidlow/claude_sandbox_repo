@@ -22,6 +22,11 @@ done
 EXIT_CODE="${MOCK_CLAUDE_EXIT:-0}"
 [ -n "${MOCK_CLAUDE_DELAY:-}" ] && sleep "$MOCK_CLAUDE_DELAY"
 
+# Only write workspace output files on success — a failing mock must not produce
+# output files, otherwise pipeline scripts see the file and treat the phase as
+# succeeded despite the non-zero exit code.
+if [ "$EXIT_CODE" -eq 0 ]; then
+
 # CLAUDE.md bootstrap phase
 if echo "$PROMPT" | grep -q "CLAUDE.md"; then
     cat > /workspace/CLAUDE.md << 'EOF'
@@ -129,5 +134,7 @@ Option B addresses the root cause within acceptable risk bounds.
 - Regression test: confirms the originally-reported failure no longer occurs
 EOF
 fi
+
+fi  # end: EXIT_CODE -eq 0 guard
 
 exit "$EXIT_CODE"

@@ -51,7 +51,7 @@ Every container run bind-mounts two paths:
    - Runs `claude --dangerously-skip-permissions -p "$TASK_PROMPT"` (or `--continue` on resume).
    - On **rate-limit** (parses "try again after HH:MM" from output): sleeps until the quota window reopens (with a 5-minute buffer), then retries without consuming a retry slot.
    - On **timeout or non-zero exit**: runs the Gemini audit (if `GEMINI_API_KEY` is set), then tries **Strategy A** (`/compact` piped to Claude Code), then falls back to **Strategy B+C** (handoff checkpoint + full `.claude/` wipe).
-3. **Gemini audit** (`run_gemini_audit`): calls `gemini-2.5-flash-lite` REST API with the failure log, `CLAUDE.md`, and `git diff`. Writes advice to `GEMINI_ADVICE.md` and prepends it to the next prompt.
+3. **Gemini audit** (`run_gemini_audit`): calls the Gemini API with automatic model fallback (flash models first: 3.5→3→2.5; falls back to lite models with a warning if all flash models are rate-limited). Writes advice to `GEMINI_ADVICE.md` and prepends it to the next prompt.  Set `GEMINI_MODEL_TIER=lite` to force lite-only (e.g. for test runs).
 
 ### Per-model token/timeout budgets (in `launch-scripted.sh`)
 | Model | `MAX_MINUTES` | `MAX_CONTEXT_TOKENS` | `MAX_THINKING_TOKENS` |
