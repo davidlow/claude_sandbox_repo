@@ -355,6 +355,44 @@ build_gemini_refactor_prompt() {
 }
 
 # ---------------------------------------------------------------------------
+# build_gemini_dispatch_prompt <task>
+# Prints a Gemini prompt for decomposing a compound task into an ordered
+# sequence of pipeline steps. Used by launch-dispatch.sh for smart routing.
+# Redirect stdout to a temp file and pass that to call_gemini.
+#
+# Output format from Gemini (one line per step):
+#   PIPELINE: task description for this step
+# Valid pipeline names: architect, qa, refactor, scripted.
+# ---------------------------------------------------------------------------
+build_gemini_dispatch_prompt() {
+    local task="$1"
+    if [ -f "CLAUDE.md" ]; then
+        printf '=== PROJECT CONTEXT (CLAUDE.md) ===\n'
+        cat "CLAUDE.md"
+        printf '\n\n'
+    fi
+    printf '%s\n\n' \
+"You are a task dispatcher for an autonomous coding agent toolchain. Decompose the task below into an ordered sequence of pipeline steps.
+
+Available pipelines:
+- architect: Design and build a new feature from scratch (brainstorm → evaluate → implement).
+- qa: Write or improve a test suite (generate → adversarial audit → remediate gaps).
+- refactor: Fix a bug, reduce coupling, or restructure code (diagnose → plan → implement).
+- scripted: General-purpose coding task that does not fit the above three.
+
+Output format — output ONLY these lines, no prose, no commentary:
+PIPELINE: task description for this step
+
+Rules:
+1. Use 1 step for simple tasks; multiple steps for compound tasks.
+2. If the task involves building a feature AND testing it, use separate architect and qa steps.
+3. If the task involves finding failures then fixing them, use qa → refactor.
+4. Keep each step prompt concrete and self-contained (passed directly to that pipeline).
+5. Output at most 8 steps."
+    printf '=== TASK ===\n%s\n' "${task:-"(no task specified)"}"
+}
+
+# ---------------------------------------------------------------------------
 # decision_log_init <file> <pipeline> <task> <model>
 # Creates a new timestamped decision log with a standard markdown header.
 # The parent directory is created if it does not exist.

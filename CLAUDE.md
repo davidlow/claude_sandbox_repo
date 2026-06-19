@@ -27,6 +27,11 @@ docker build -t claude-sandbox -f Dockerfile.claude .
 # Launch autonomous mode
 ./launch-scripted.sh "task description" [model] [--no-gemini]  # or: claude-yolo
 
+# Auto-route a task to the right pipeline (Gemini decides architect/qa/refactor/scripted)
+./launch-dispatch.sh "task description" [model] [--no-gemini] [--loop-tests[=N]]  # or: claude-dispatch
+./launch-dispatch.sh @tasks.md                    # read task from file
+./launch-dispatch.sh "@tasks.md:phase 3"          # extract a named section
+
 # Run tests
 ./tests/run_tests.sh            # all tests (unit + integration)
 ./tests/run_tests.sh --unit     # unit tests only (no Docker/credentials needed)
@@ -75,7 +80,11 @@ Every container run bind-mounts two paths:
 | `setup-auth.sh` | One-time auth bootstrap: copies `.claude.json`, warms first-run state |
 | `launch-interactive.sh` | `claude-box` alias implementation |
 | `launch-scripted.sh` | `claude-yolo` alias: full retry/recovery/audit engine |
-| `lib/launch-lib.sh` | Pure helper functions sourced by launch-scripted.sh and the test suite |
+| `launch-architect.sh` | `claude-architect` alias: brainstorm → evaluate → implement |
+| `launch-qa.sh` | `claude-qa` alias: generate tests → adversarial audit → remediate |
+| `launch-refactor.sh` | `claude-refactor` alias: diagnose → plan → implement |
+| `launch-dispatch.sh` | `claude-dispatch` alias: Gemini-powered task router across all pipelines |
+| `lib/launch-lib.sh` | Pure helper functions sourced by all pipeline scripts and the test suite |
 | `tests/run_tests.sh` | Test runner — `--unit` (no Docker) or `--int` (full integration) |
 | `tests/test_*.sh` | Individual test files: unit tests for bash functions + integration tests |
 | `tests/fixtures/` | Fake credential JSON files used by unit tests |

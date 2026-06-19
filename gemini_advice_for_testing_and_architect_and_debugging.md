@@ -92,7 +92,7 @@ if [ -n "$GEMINI_API_KEY" ]; then
     find . -type f \( -name "*.py" -o -name "*.js" \) -not -path "*/node_modules/*" -exec cat {} + > .qa_audit_payload.txt
     
     # Curl Gemini API
-    curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_API_KEY}" \
+    curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${GEMINI_API_KEY}" \
         -H 'Content-Type: application/json' \
         -d "{
             'contents': [{'parts':[{'text': 'Analyze this code and test suite. What edge cases or failure modes are not being tested? Be highly adversarial.\n\n$(cat .qa_audit_payload.txt | jq -aRs '.')'}]}]

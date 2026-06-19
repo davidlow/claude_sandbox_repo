@@ -253,4 +253,56 @@ set -e
 assert_equals "refactor: exits 1 with no args" "1" "$RF_RC"
 assert_contains "refactor: shows error message" "Error" "$RF_NO_ARGS"
 
+# ==============================================================================
+suite "build_gemini_dispatch_prompt"
+# ==============================================================================
+
+DISP_OUT=$(build_gemini_dispatch_prompt "add user auth, then write tests for it")
+
+assert_contains "dispatch prompt: lists architect pipeline"   "architect"  "$DISP_OUT"
+assert_contains "dispatch prompt: lists qa pipeline"          "qa"         "$DISP_OUT"
+assert_contains "dispatch prompt: lists refactor pipeline"    "refactor"   "$DISP_OUT"
+assert_contains "dispatch prompt: lists scripted pipeline"    "scripted"   "$DISP_OUT"
+assert_contains "dispatch prompt: specifies output format"    "PIPELINE:"  "$DISP_OUT"
+assert_contains "dispatch prompt: embeds task"                "add user auth" "$DISP_OUT"
+assert_contains "dispatch prompt: mentions step limit"        "8"          "$DISP_OUT"
+
+# Verify CLAUDE.md is included when present (run from a temp dir with CLAUDE.md)
+DISP_CLAUDE_DIR=$(mktemp -d)
+trap 'rm -rf "$DISP_CLAUDE_DIR"' RETURN
+printf '# Test Project\nBuild: make test\n' > "$DISP_CLAUDE_DIR/CLAUDE.md"
+DISP_CLAUDE_OUT=$(cd "$DISP_CLAUDE_DIR" && build_gemini_dispatch_prompt "fix the bug")
+assert_contains "dispatch prompt: includes CLAUDE.md when present" "PROJECT CONTEXT" "$DISP_CLAUDE_OUT"
+assert_contains "dispatch prompt: embeds CLAUDE.md content" "make test" "$DISP_CLAUDE_OUT"
+
+# Without CLAUDE.md the section must be absent
+DISP_NO_CLAUDE_DIR=$(mktemp -d)
+trap 'rm -rf "$DISP_NO_CLAUDE_DIR"' RETURN
+DISP_NO_CLAUDE_OUT=$(cd "$DISP_NO_CLAUDE_DIR" && build_gemini_dispatch_prompt "fix the bug")
+assert_not_contains "dispatch prompt: no CLAUDE.md section when absent" "PROJECT CONTEXT" "$DISP_NO_CLAUDE_OUT"
+
+# ==============================================================================
+suite "launch-dispatch.sh — help and validation"
+# ==============================================================================
+
+DISP_HELP=$(bash "$REPO_DIR/launch-dispatch.sh" --help 2>&1) || true
+assert_contains "dispatch --help: shows USAGE"    "USAGE"  "$DISP_HELP"
+assert_contains "dispatch --help: mentions @file" "@"      "$DISP_HELP"
+assert_contains "dispatch --help: mentions loop"  "loop"   "$DISP_HELP"
+
+set +e
+DISP_NO_ARGS=$(bash "$REPO_DIR/launch-dispatch.sh" 2>&1)
+DISP_NO_ARGS_RC=$?
+set -e
+assert_equals "dispatch: exits 1 with no args" "1" "$DISP_NO_ARGS_RC"
+assert_contains "dispatch: shows error with no args" "Error" "$DISP_NO_ARGS"
+
+# Missing @file reference
+set +e
+DISP_MISSING=$(GEMINI_API_KEY="" bash "$REPO_DIR/launch-dispatch.sh" "@/nonexistent/tasks_$$.md" --no-gemini 2>&1)
+DISP_MISSING_RC=$?
+set -e
+assert_equals "dispatch: exits 1 for missing @file" "1" "$DISP_MISSING_RC"
+assert_contains "dispatch: shows file-not-found error" "not found" "$DISP_MISSING"
+
 print_results
