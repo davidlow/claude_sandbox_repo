@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Docker sandbox that lets you run Claude Code autonomously using a Claude Pro OAuth session (no API key). Designed for Debian Linux and ChromeOS Linux (Crostini). The two main entry points are:
 
-- **`claude-box`** (`launch-interactive.sh`) — interactive Claude Code session, asks for permission before actions
+- **`claude-box`** (`launch-interactive.sh`) — interactive Claude Code session with access to pipeline skills
 - **`claude-yolo`** (`launch-scripted.sh`) — fully autonomous mode with `--dangerously-skip-permissions`, rate-limit auto-recovery, context compaction, and optional Gemini cross-model audit on failure
 
 ## Common Commands
@@ -27,15 +27,29 @@ docker build -t claude-sandbox -f Dockerfile.claude .
 # Launch autonomous mode
 ./launch-scripted.sh "task description" [model] [--no-gemini]  # or: claude-yolo
 
-# Auto-route a task to the right pipeline (Gemini decides architect/qa/refactor/scripted)
-./launch-dispatch.sh "task description" [model] [--no-gemini] [--loop-tests[=N]]  # or: claude-dispatch
-./launch-dispatch.sh @tasks.md                    # read task from file
-./launch-dispatch.sh "@tasks.md:phase 3"          # extract a named section
-
 # Run tests
 ./tests/run_tests.sh            # all tests (unit + integration)
 ./tests/run_tests.sh --unit     # unit tests only (no Docker/credentials needed)
 ./tests/run_tests.sh --int      # integration tests only (requires Docker + credentials)
+```
+
+## Pipeline Skills (use inside claude-box)
+
+Multi-phase pipeline workflows are implemented as native Claude Code skills. Invoke them inside a `claude-box` session:
+
+```
+/architect "add a plugin system"          # brainstorm → [gemini critique] → decide → implement
+/qa "write tests for the auth module"     # generate tests → [gemini audit] → fill gaps
+/refactor "fix the race condition"        # diagnose → decide → implement → [gemini on failure]
+```
+
+Building blocks (usable standalone):
+```
+/brainstorm [architect|refactor] <task>   # generate 3 approaches → docs/
+/decide [architect|refactor] <task>       # evaluate candidates → docs/approved_*.md
+/implement [architect|refactor|<task>]    # execute a spec or direct task
+/geminiapi [architect-critique|qa-audit|refactor-diagnosis|dispatch] <task>
+/logging [init|section|note|outcome|read] <pipeline> <args>
 ```
 
 ## Architecture
@@ -55,8 +69,8 @@ Every container run bind-mounts two paths:
 2. **Main loop** (up to `MAX_RETRIES` attempts):
    - Runs `claude --dangerously-skip-permissions -p "$TASK_PROMPT"` (or `--continue` on resume).
    - On **rate-limit** (parses "try again after HH:MM" from output): sleeps until the quota window reopens (with a 5-minute buffer), then retries without consuming a retry slot.
-   - On **timeout or non-zero exit**: runs the Gemini audit (if `GEMINI_API_KEY` is set), then tries **Strategy A** (`/compact` piped to Claude Code), then falls back to **Strategy B+C** (handoff checkpoint + full `.claude/` wipe).
-3. **Gemini audit** (`run_gemini_audit`): calls the Gemini API with automatic model fallback (flash models first: 3.5→3→2.5; falls back to lite models with a warning if all flash models are rate-limited). Writes advice to `GEMINI_ADVICE.md` and prepends it to the next prompt.  Set `GEMINI_MODEL_TIER=lite` to force lite-only (e.g. for test runs).
+   - On **timeout or non-zero exit**: runs the Gemini audit (if `GEMINI_API_KEY` is set), then tries **Strategy A** (`/compact` piped to Claude Code), then falls back to **Strategy B+C** (handoff checkpoint + full `.claude/` wipe; wipe restores committed skills/commands via `git checkout`).
+3. **Gemini audit** (`run_gemini_audit`): calls the Gemini API with automatic model fallback (tries flash models in order: 3.5→3→2.5→2.5-flash-lite; falls back to lite models with a warning if all flash models are rate-limited). Writes advice to `GEMINI_ADVICE.md` and prepends it to the next prompt. Set `GEMINI_MODEL_TIER=lite` to force lite-only (e.g. for test runs).
 
 ### Per-model token/timeout budgets (in `launch-scripted.sh`)
 | Model | `MAX_MINUTES` | `MAX_CONTEXT_TOKENS` | `MAX_THINKING_TOKENS` |
@@ -70,6 +84,9 @@ Every container run bind-mounts two paths:
 - `DOCKER_RUN_BASE` — uses `-it` (allocates a PTY) for the main task so Claude Code's TUI renders correctly.
 - `DOCKER_RECOVERY_BASE` — uses `-i` (no TTY) for headless recovery passes (`/compact`, handoff writes, Gemini bootstrap) where a PTY would corrupt output.
 
+### Skills and phase isolation
+Pipeline skills (in `.claude/skills/`) use `context: fork` — each phase spawns a fresh subagent with no memory of prior phase conversations. Phases share data through files written to `docs/` and `tests/`. This replaces the `.claude/` wipe pattern used by the legacy bash scripts.
+
 ## Key Files
 
 | File | Role |
@@ -80,14 +97,15 @@ Every container run bind-mounts two paths:
 | `setup-auth.sh` | One-time auth bootstrap: copies `.claude.json`, warms first-run state |
 | `launch-interactive.sh` | `claude-box` alias implementation |
 | `launch-scripted.sh` | `claude-yolo` alias: full retry/recovery/audit engine |
-| `launch-architect.sh` | `claude-architect` alias: brainstorm → evaluate → implement |
-| `launch-qa.sh` | `claude-qa` alias: generate tests → adversarial audit → remediate |
-| `launch-refactor.sh` | `claude-refactor` alias: diagnose → plan → implement |
-| `launch-dispatch.sh` | `claude-dispatch` alias: Gemini-powered task router across all pipelines |
-| `lib/launch-lib.sh` | Pure helper functions sourced by all pipeline scripts and the test suite |
+| `lib/launch-lib.sh` | Pure helper functions sourced by pipeline scripts and the test suite |
+| `.claude/skills/` | Pipeline skills: `brainstorm`, `decide`, `implement`, `geminiapi`, `logging`, `architect`, `qa`, `refactor` |
+| `.claude/commands/` | Thin slash-command aliases for every skill |
+| `.claude/settings.json` | Project-level Bash tool permissions for skills |
 | `tests/run_tests.sh` | Test runner — `--unit` (no Docker) or `--int` (full integration) |
 | `tests/test_*.sh` | Individual test files: unit tests for bash functions + integration tests |
 | `tests/fixtures/` | Fake credential JSON files used by unit tests |
+| `docs/decisions/` | Timestamped decision logs from pipeline runs (YYYYMMDD_HHMM_description_stage.md) |
+| `legacy/` | Superseded bash pipeline scripts (`launch-architect.sh`, `launch-qa.sh`, etc.) |
 
 ## Style Notes
 
@@ -95,7 +113,7 @@ Every container run bind-mounts two paths:
 - `PIPESTATUS[0]` is used (not `$?`) after piped Docker commands so `tee`'s exit code doesn't mask failures.
 - Recovery strategies are labeled A/B/C in comments throughout `launch-scripted.sh` — keep this convention when adding strategies.
 - `GEMINI_ADVICE.md` is intentionally left on disk after a final failure for user review; it is cleaned up on success.
-- `.claude/` and `claude-auth/` are git-ignored; never commit OAuth credentials or session state.
+- `claude-auth/` is git-ignored; never commit OAuth credentials or session state. `.claude/` runtime state is also git-ignored (via `.claude/.gitignore`); only skills, commands, and `settings.json` are committed.
 
 ## Development Practices
 

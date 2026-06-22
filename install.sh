@@ -19,10 +19,6 @@ sudo usermod -aG docker "$USER"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 chmod +x "$REPO_DIR/launch-interactive.sh" \
          "$REPO_DIR/launch-scripted.sh" \
-         "$REPO_DIR/launch-architect.sh" \
-         "$REPO_DIR/launch-qa.sh" \
-         "$REPO_DIR/launch-refactor.sh" \
-         "$REPO_DIR/launch-dispatch.sh" \
          "$REPO_DIR/setup-auth.sh" \
          "$REPO_DIR/entrypoint.sh" \
          "$REPO_DIR/tests/run_tests.sh" \
@@ -47,22 +43,6 @@ if ! grep -q "alias claude-box-auth=" ~/.bashrc; then
     echo "alias claude-box-auth='$REPO_DIR/setup-auth.sh'" >> ~/.bashrc
 fi
 
-if ! grep -q "alias claude-architect=" ~/.bashrc; then
-    echo "alias claude-architect='$REPO_DIR/launch-architect.sh'" >> ~/.bashrc
-fi
-
-if ! grep -q "alias claude-qa=" ~/.bashrc; then
-    echo "alias claude-qa='$REPO_DIR/launch-qa.sh'" >> ~/.bashrc
-fi
-
-if ! grep -q "alias claude-refactor=" ~/.bashrc; then
-    echo "alias claude-refactor='$REPO_DIR/launch-refactor.sh'" >> ~/.bashrc
-fi
-
-if ! grep -q "alias claude-dispatch=" ~/.bashrc; then
-    echo "alias claude-dispatch='$REPO_DIR/launch-dispatch.sh'" >> ~/.bashrc
-fi
-
 echo ""
 echo "=========================================================="
 echo "🎉 Installation complete!"
@@ -80,10 +60,6 @@ echo "  3. Bootstrap the sandbox credentials (once):"
 echo "       claude-box-auth"
 echo ""
 echo "  4. Launch a session from any project directory:"
-echo "       claude-box              # interactive"
-echo "       claude-yolo \"task\"      # autonomous (single-stage)"
-echo "       claude-architect \"task\" # multi-stage: brainstorm → evaluate → implement"
-echo "       claude-qa \"scope\"       # multi-stage: test generation + adversarial audit"
-echo "       claude-refactor \"task\"  # multi-stage: diagnose → plan → implement"
-echo "       claude-dispatch \"task\" # auto-route: Gemini picks the right pipeline(s)"
+echo "       claude-box              # interactive (then use /architect, /qa, /refactor)"
+echo "       claude-yolo \"task\"      # fully autonomous, no manual intervention"
 echo "=========================================================="

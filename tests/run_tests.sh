@@ -30,6 +30,7 @@ UNIT_TESTS=(
     test_interactive_script.sh
     test_pipelines.sh
     test_unit_lib_extended.sh
+    test_phase1_consolidation.sh
 )
 
 # Legacy integration tests (Docker + credentials, run the actual Claude binary)

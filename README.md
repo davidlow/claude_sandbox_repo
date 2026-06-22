@@ -21,7 +21,7 @@ OAuth tokens are extracted from `~/.claude/.credentials.json` and injected as `C
 
 ## Repository Structure
 
-| File | Purpose |
+| File / Directory | Purpose |
 |---|---|
 | `Dockerfile.claude` | Debian image: Node 20, Python venv, Claude Code native install |
 | `entrypoint.sh` | Restores `~/.claude.json` into the container home on every start; saves it back on exit |
@@ -30,9 +30,14 @@ OAuth tokens are extracted from `~/.claude/.credentials.json` and injected as `C
 | `launch-interactive.sh` | `claude-box` — interactive Claude Code session |
 | `launch-scripted.sh` | `claude-yolo` — autonomous mode with rate-limit auto-recovery and Gemini audit |
 | `lib/launch-lib.sh` | Pure helper functions sourced by `launch-scripted.sh` and the test suite |
+| `.claude/skills/` | Native Claude Code skills: `brainstorm`, `decide`, `implement`, `geminiapi`, `logging`, `architect`, `qa`, `refactor` |
+| `.claude/commands/` | Slash-command aliases for every skill |
+| `.claude/settings.json` | Project-level tool permissions for skills |
 | `tests/run_tests.sh` | Test runner — `--unit` (no Docker) or `--int` (full integration) |
 | `tests/test_*.sh` | Unit tests for bash functions + integration tests |
 | `tests/fixtures/` | Fake credential JSON files used by unit tests |
+| `docs/decisions/` | Timestamped decision logs written by the pipeline skills |
+| `legacy/` | Old bash pipeline scripts (superseded by skills) |
 | `.env.local.example` | Template for local API keys (copy to `.env.local`, which is gitignored) |
 
 ---
@@ -58,7 +63,7 @@ cd ~/claude-sandbox-repo
 `install.sh` will:
 - Install Docker if not present
 - Build the `claude-sandbox` Docker image
-- Register three shell aliases in `~/.bashrc`: `claude-box`, `claude-yolo`, `claude-box-auth`
+- Register shell aliases in `~/.bashrc`: `claude-box`, `claude-yolo`, `claude-box-auth`
 
 ### 2. Reload your shell
 
@@ -83,7 +88,7 @@ Navigate to **any project directory**, then run either command.
 
 ### Interactive mode — `claude-box`
 
-Drops you into a full Claude Code session. Claude asks for permission before making changes.
+Drops you into a full Claude Code session. Use it for manual interaction or to run the pipeline skills (see below).
 
 ```bash
 cd ~/my-project
@@ -104,93 +109,115 @@ claude-yolo "add input validation to all API endpoints" claude-haiku-4-5
 claude-yolo "migrate the database schema" --no-gemini
 ```
 
-**Rate limit handling:** if Claude Pro's token quota is exhausted mid-task, `claude-yolo` detects the reset time from the error message, prints a countdown every 5 minutes, then resumes automatically — no intervention needed.
+**Rate limit handling:** if Claude Pro's token quota is exhausted mid-task, `claude-yolo` detects the reset time from the error message, prints a countdown every 5 minutes, then resumes automatically.
 
-**Recovery strategies:** on timeout or failure, `claude-yolo` tries three escalating strategies before giving up:
-- **Strategy A** — pipes `/compact` to Claude Code to summarise the conversation history in-place, then resumes
-- **Strategy B+C** — asks Claude to write a `.task_handoff.md` checkpoint, wipes the bloated session, then starts fresh with the handoff context injected into the next prompt
+**Recovery strategies:** on timeout or failure, `claude-yolo` tries three escalating strategies:
+- **Strategy A** — pipes `/compact` to Claude Code to summarise the conversation in-place, then resumes
+- **Strategy B+C** — asks Claude to write a `.task_handoff.md` checkpoint, wipes the bloated session, then starts fresh with the handoff context injected
 
 **Context bootstrap:** if `CLAUDE.md` is absent from your project root, `claude-yolo` generates it automatically before starting the main task.
 
 ---
 
-## Multi-Stage Pipelines
+## Pipeline Skills
 
-Three higher-level commands that physically separate brainstorming, evaluation, and implementation into isolated containers. The `.claude/` session directory is wiped between phases so each model starts with a fresh context — preventing the "cognitive anchoring" where an LLM fixates on its first idea.
+Inside a `claude-box` session, a set of composable skills and slash commands turn Claude Code into a structured multi-phase pipeline engine. Each skill phase runs in an isolated subagent (`context: fork`) with a fresh context window — preventing the cognitive anchoring that comes from carrying one phase's reasoning into the next.
 
-| Command | When to use | Phases |
-|---|---|---|
-| `claude-architect` | New features, greenfield design | Haiku brainstorms 3 approaches → Gemini critique → Sonnet picks one → Sonnet implements |
-| `claude-qa` | Building or hardening a test suite | Sonnet writes + fixes tests → Gemini adversarial audit → Sonnet adds missing coverage |
-| `claude-refactor` | Bug fixes, reducing technical debt | Haiku diagnoses + proposes 3 options → Sonnet picks one → Sonnet implements + verifies |
+### Building Blocks
 
-### `claude-architect`
+Use these individually for manual step-by-step control, or let the orchestrators call them automatically.
 
-```bash
-claude-architect "add a plugin system to the CLI"
-claude-architect "design a caching layer for the database" claude-opus-4-8
-claude-architect "redesign the auth module" --no-gemini
+| Skill / Command | What it does |
+|---|---|
+| `/brainstorm [architect\|refactor] <task>` | Haiku generates 3 distinct approaches → `docs/architecture_candidates.md` or `docs/refactor_candidates.md` |
+| `/decide [architect\|refactor] <task>` | Sonnet evaluates candidates, picks the best, writes spec → `docs/approved_architecture.md` or `docs/approved_fix.md` |
+| `/implement [architect\|refactor\|<task>]` | Executes an approved spec or a direct task, then runs tests |
+| `/geminiapi [architect-critique\|qa-audit\|refactor-diagnosis\|dispatch] <task>` | Sends context to Gemini for cross-model audit; bridges to `lib/launch-lib.sh` |
+| `/logging [init\|section\|note\|outcome\|read] ...` | Manages `docs/decisions/` decision logs for the audit trail |
+
+### Orchestrators
+
+These run all phases end-to-end. Pass `--no-gemini` to skip the Gemini audit step.
+
+#### `/architect <task> [--no-gemini]`
+
+Full architectural design pipeline — use for new features or significant design decisions.
+
+```
+/architect "add a plugin system to the CLI"
+/architect "design a caching layer for the database" --no-gemini
 ```
 
-Writes intermediate artifacts to `docs/` for review: `architecture_candidates.md` (three approaches), `gemini_architectural_audit.md` (Gemini critique, if enabled), and `approved_architecture.md` (the chosen spec).
+**Phases:**
+1. **Brainstorm** (haiku, isolated) — generates 3 distinct architectural approaches → `docs/architecture_candidates.md`
+2. **Gemini critique** (optional) — adversarial review of all three candidates → `docs/gemini_architectural_audit.md`
+3. **Decide** (sonnet, isolated) — selects the best option, writes spec → `docs/approved_architecture.md`
+4. **Implement** (isolated) — builds exactly what the spec says, runs tests
 
-### `claude-qa`
+#### `/qa <scope> [--no-gemini]`
 
-```bash
-claude-qa "write tests for the payments module"
-claude-qa "add integration tests for the REST API" claude-opus-4-8
-claude-qa "test the file upload handler" --no-gemini
+Adversarial test generation — use when building or hardening a test suite.
+
+```
+/qa "write tests for the payments module"
+/qa "add integration tests for the REST API" --no-gemini
 ```
 
-With `GEMINI_API_KEY` set, Gemini acts as an adversarial Red Team reviewer after Phase 1: it scans the codebase and test files to find edge cases, boundary conditions, and race conditions that the initial suite misses. Findings are saved to `tests/gemini_missing_coverage.md` and Phase 2 implements them all.
+**Phases:**
+1. **Generate** (isolated) — writes comprehensive tests, runs them, fixes failures
+2. **Gemini red-team audit** (optional) — scans all source and test files for edge cases, boundary conditions, race conditions → `tests/gemini_missing_coverage.md`
+3. **Remediate** (isolated) — implements every missing test case from the Gemini audit, verifies all pass
 
-### `claude-refactor`
+#### `/refactor <task> [--no-gemini]`
 
-```bash
-claude-refactor "fix the race condition in the job queue"
-claude-refactor "reduce coupling in the user service" claude-opus-4-8
-claude-refactor "the payment processor fails on retry" --no-gemini
+Bug fix and refactoring pipeline — use for fixing bugs or reducing technical debt.
+
+```
+/refactor "fix the race condition in the job queue"
+/refactor "reduce coupling in the user service" --no-gemini
 ```
 
-Intermediate artifacts in `docs/`: `refactor_candidates.md` (three options: minimal patch, structural fix, module rewrite) and `approved_fix.md` (chosen plan). In Phase 3, Gemini acts as a circuit-breaker on failure — if Claude's implementation attempt fails, Gemini diagnoses the logical flaw before each retry.
+**Phases:**
+1. **Diagnose** (haiku, isolated) — analyzes the problem and proposes 3 options (minimal patch / structural fix / rewrite) → `docs/refactor_candidates.md`
+2. **Decide** (sonnet, isolated) — selects the best approach, writes a step-by-step plan → `docs/approved_fix.md`
+3. **Implement** (isolated) — applies the fix, runs tests; if tests fail and Gemini is enabled, calls Gemini for circuit-breaker diagnosis
+
+### Phase Isolation
+
+Skills use `context: fork` — each phase spawns a completely fresh subagent with no memory of prior phase conversations. Phases share data only through files written to `docs/` and `tests/`. This prevents cognitive anchoring (an LLM fixating on its first idea) without needing separate Docker containers.
+
+### Decision Logs
+
+Every orchestrator run writes a timestamped decision log to `docs/decisions/YYYYMMDD_HHMM_<slug>_<pipeline>.md`. These logs capture what was attempted, which option was chosen, and whether it succeeded. Later `/decide` runs read past logs to avoid repeating failed approaches.
 
 ---
 
 ## Gemini Cross-Model Audit
 
-When a task fails or times out, `claude-yolo` can send the failure context (task objective, `CLAUDE.md`, git diff, last 100 lines of output) to **Gemini 2.5 Flash** for an independent architectural analysis. The advice is saved to `GEMINI_ADVICE.md` and prepended to the next retry prompt.
+When `claude-yolo` tasks fail or time out, it sends the failure context (task objective, `CLAUDE.md`, git diff, last 100 lines of output) to **Gemini Flash** for an independent architectural analysis. The advice is saved to `GEMINI_ADVICE.md` and prepended to the next retry prompt.
+
+Inside `claude-box`, the `/geminiapi` skill provides the same capability on demand.
 
 ### Setting up your Gemini API key (recommended)
 
-Copy the example file and add your key:
-
 ```bash
 cp .env.local.example .env.local
-# then edit .env.local and replace "your-key-here" with your actual key
+# edit .env.local and replace "your-key-here" with your actual key
 ```
 
-`.env.local` is gitignored and sourced automatically by every launch script — no manual `export` needed. Get a free key at [Google AI Studio](https://aistudio.google.com/apikey).
+`.env.local` is gitignored and sourced automatically by `claude-yolo` — no manual `export` needed. Get a free key at [Google AI Studio](https://aistudio.google.com/apikey).
 
-Alternatively, export the key in your shell session directly:
-
-```bash
-export GEMINI_API_KEY="your-key-here"
-claude-yolo "your task"
-```
-
-To disable for a single run even if the key is set:
+To disable for a single `claude-yolo` run:
 
 ```bash
 claude-yolo "your task" --no-gemini
 ```
 
-`GEMINI_ADVICE.md` is kept on disk after a final failure for your review, and cleaned up automatically on success.
-
 ---
 
 ## Model Tiers
 
-`claude-yolo` enforces per-model resource budgets to control costs:
+`claude-yolo` enforces per-model resource budgets:
 
 | Model | Timeout | Max retries | Context tokens | Thinking tokens |
 |---|---|---|---|---|
@@ -205,8 +232,6 @@ Unknown model names fall back to the Sonnet defaults.
 
 ## When Your Session Expires
 
-Claude Pro sessions have a lifetime. When they expire, re-authenticate on the host and re-run the bootstrap:
-
 ```bash
 claude auth login --claudeai   # browser login on the host
 claude-box-auth                # re-copy config into the container mount
@@ -216,7 +241,7 @@ claude-box-auth                # re-copy config into the container mount
 
 ## Updating Claude Code
 
-Claude Code's native install inside the image supports auto-updates, but since containers are ephemeral those updates are lost on exit. To pick up a new version permanently, rebuild the image:
+Claude Code auto-updates are lost when ephemeral containers exit. To pick up a new version permanently:
 
 ```bash
 cd ~/claude-sandbox-repo
@@ -233,8 +258,6 @@ docker build -t claude-sandbox -f Dockerfile.claude .
 ./tests/run_tests.sh --int      # integration tests only — requires Docker + credentials
 ```
 
-Unit tests cover the pure bash functions in `lib/launch-lib.sh` (argument parsing, model tier selection, rate-limit detection, prompt composition, etc.) and can be run anywhere without any external dependencies.
-
 ---
 
 ## Safe Usage Notes
@@ -242,3 +265,9 @@ Unit tests cover the pure bash functions in `lib/launch-lib.sh` (argument parsin
 - **Commit before `claude-yolo`** — the container has full read/write access to your project directory. Stash or commit your work first.
 - **Rate limits** — `claude-yolo` handles Pro rate limits automatically, but very long tasks may exhaust multiple quota windows.
 - **`~/.claude` is shared** — the container reads and writes to your host's `~/.claude/` directory, so session history is shared between your host Claude Code and the sandbox.
+
+---
+
+## Legacy Bash Pipelines
+
+The original bash pipeline scripts (`launch-architect.sh`, `launch-qa.sh`, `launch-refactor.sh`, `launch-dispatch.sh`, `run-pipeline.sh`) have been superseded by the native Claude Code skills above. They are preserved in `legacy/` for reference.

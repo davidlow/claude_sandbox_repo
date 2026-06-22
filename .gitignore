@@ -1,5 +1,8 @@
 # Ignore Claude Code runtime session state (skills/commands/settings.json are committed)
 claude.log
+.task_handoff.md
+GEMINI_ADVICE.md
+gemini_advice_for_testing_and_architect_and_debugging.md
 
 # Ignore OAuth credentials — never commit these
 claude-auth/
