@@ -402,8 +402,10 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
 
             # Strategy C: Wipe the bloated failed session. Carrying a full failed
             # history into the next attempt wastes tokens and biases reasoning.
+            # Restore committed project config (skills, commands, settings) after wipe.
             echo "🗑️  Resetting session context (handoff file preserved in workspace)..."
             rm -rf .claude/
+            git checkout HEAD -- .claude/ 2>/dev/null || true
             SESSION_STARTED=false   # Next iteration must start fresh, not --continue
 
             # Build the new BASE_TASK from the handoff (if captured), then inject

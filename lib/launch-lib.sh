@@ -141,7 +141,9 @@ run_headless_phase() {
             claude --dangerously-skip-permissions --model "$model" -p "$prompt"
     ) || exit_code=$?
 
+    # Wipe session state but restore committed project config (skills, commands, settings).
     rm -rf .claude/ 2>/dev/null || true
+    git checkout HEAD -- .claude/ 2>/dev/null || true
     return $exit_code
 }
 

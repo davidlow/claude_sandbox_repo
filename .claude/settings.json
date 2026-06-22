@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source /workspace/lib/launch-lib.sh*)",
+      "Bash(python3 *)",
+      "Bash(mktemp)",
+      "Bash(rm -f /tmp/*)",
+      "Bash(mkdir -p docs*)",
+      "Bash(mkdir -p docs/decisions*)",
+      "Bash(mkdir -p tests*)",
+      "Bash(date *)",
+      "Bash(git diff*)",
+      "Bash(git status*)",
+      "Bash(find . *)",
+      "Bash(head -c *)",
+      "Bash(wc -c *)",
+      "Bash(ls docs*)",
+      "Bash(ls tests*)",
+      "Bash(sed *)"
+    ]
+  }
+}

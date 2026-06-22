@@ -1,0 +1,8 @@
+# Ignore all Claude Code runtime state — only skills, commands, and settings.json are committed
+*
+!skills/
+!skills/**
+!commands/
+!commands/**
+!settings.json
+!.gitignore

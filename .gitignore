@@ -1,5 +1,4 @@
-# Ignore hidden Claude Code session states and local context caches
-.claude/
+# Ignore Claude Code runtime session state (skills/commands/settings.json are committed)
 claude.log
 
 # Ignore OAuth credentials — never commit these
