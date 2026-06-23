@@ -5,18 +5,27 @@
       "Bash(python3 *)",
       "Bash(mktemp)",
       "Bash(rm -f /tmp/*)",
-      "Bash(mkdir -p docs*)",
-      "Bash(mkdir -p docs/decisions*)",
-      "Bash(mkdir -p tests*)",
+      "Bash(rm -f *)",
+      "Bash(mkdir -p *)",
       "Bash(date *)",
       "Bash(git diff*)",
       "Bash(git status*)",
+      "Bash(git checkout*)",
+      "Bash(git merge*)",
+      "Bash(git branch*)",
+      "Bash(git log*)",
+      "Bash(git rev-parse*)",
+      "Bash(git stash*)",
       "Bash(find . *)",
       "Bash(head -c *)",
       "Bash(wc -c *)",
-      "Bash(ls docs*)",
-      "Bash(ls tests*)",
-      "Bash(sed *)"
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(sed *)",
+      "Bash(grep *)",
+      "Bash(tr *)",
+      "Bash(cut *)",
+      "Bash(echo *)"
     ]
   }
 }
