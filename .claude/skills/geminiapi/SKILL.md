@@ -60,7 +60,9 @@ find . -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.tsx" 
   -o -name "*.c" -o -name "*.cpp" -o -name "*.java" \) \
   -not -path "*/node_modules/*" -not -path "*/.git/*" \
   -not -path "*/dist/*" -not -path "*/build/*" -not -path "*/vendor/*" \
-  -not -path "*/.venv/*" -not -path "*/__pycache__/*" | while read f; do
+  -not -path "*/.venv/*" -not -path "*/venv/*" -not -path "*/__pycache__/*" \
+  -not -path "*/target/*" -not -path "*/.next/*" \
+  -not -path "*/coverage/*" -not -path "*/.pytest_cache/*" | while read f; do
     echo "=== $f ===" >> "$PAYLOAD_FILE"
     cat "$f" >> "$PAYLOAD_FILE"
     echo "" >> "$PAYLOAD_FILE"
