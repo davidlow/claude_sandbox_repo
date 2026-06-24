@@ -30,14 +30,16 @@ OAuth tokens are extracted from `~/.claude/.credentials.json` and injected as `C
 | `launch-interactive.sh` | `claude-box` — interactive Claude Code session |
 | `launch-scripted.sh` | `claude-yolo` — autonomous mode with rate-limit auto-recovery and Gemini audit |
 | `lib/launch-lib.sh` | Pure helper functions sourced by `launch-scripted.sh` and the test suite |
-| `.claude/skills/` | Native Claude Code skills: `brainstorm`, `decide`, `implement`, `geminiapi`, `logging`, `architect`, `qa`, `refactor` |
+| `.claude/skills/` | Native Claude Code skills: `gm`, `architect`, `brainstorm`, `decide`, `implement`, `qa`, `refactor`, `geminiapi`, `logging` |
 | `.claude/commands/` | Slash-command aliases for every skill |
 | `.claude/settings.json` | Project-level tool permissions for skills |
 | `tests/run_tests.sh` | Test runner — `--unit` (no Docker) or `--int` (full integration) |
 | `tests/test_*.sh` | Unit tests for bash functions + integration tests |
 | `tests/fixtures/` | Fake credential JSON files used by unit tests |
 | `docs/decisions/` | Timestamped decision logs written by the pipeline skills |
+| `docs/skills-and-commands-overview.md` | Full technical reference for all skills and commands |
 | `legacy/` | Old bash pipeline scripts (superseded by skills) |
+| `tasks.md` | Example task list for `/gm` to execute autonomously |
 | `.env.local.example` | Template for local API keys (copy to `.env.local`, which is gitignored) |
 
 ---
@@ -123,6 +125,36 @@ claude-yolo "migrate the database schema" --no-gemini
 
 Inside a `claude-box` session, a set of composable skills and slash commands turn Claude Code into a structured multi-phase pipeline engine. Each skill phase runs in an isolated subagent (`context: fork`) with a fresh context window — preventing the cognitive anchoring that comes from carrying one phase's reasoning into the next.
 
+### General Manager — `/gm` (hands-off engine)
+
+The top-level orchestrator. Give it a task list or a free-text prompt; it decomposes the work, creates a **git branch per task**, invokes the right pipeline skill for each one, and merges to the base branch only when all tests pass. Failed branches are left alive for manual inspection.
+
+```bash
+# Inside claude-box:
+
+/gm "add user authentication with JWT tokens and refresh logic"
+
+/gm --tasks tasks.md                             # run every unchecked item in tasks.md
+/gm --tasks tasks.md --qa                        # + adversarial QA layer before each merge
+/gm --tasks tasks.md --no-gemini                 # skip Gemini cross-model audits
+/gm "Fix: broken pagination; Add: CSV export; QA: test the reporting module"
+```
+
+**What it does per task:**
+1. Creates `gm/YYYYMMDD-HHMM-<slug>` branch from the current base
+2. Detects task type → routes to `/architect`, `/refactor`, or `/qa`
+3. With `--qa`: runs `/qa` as a second adversarial test pass after the primary skill passes
+4. On success: `git merge --no-ff` to base, marks the `tasks.md` checkbox `[x]`
+5. On failure: leaves the branch alive, continues to the next task
+
+**Type detection:**
+
+| Prefix / keyword | Skill invoked |
+|---|---|
+| `Fix:`, `Bug:`, `Hotfix:`, starts with "fix/patch/repair/debug" | `/refactor` |
+| `QA:`, `Test:`, `Coverage:`, starts with "test/write tests" | `/qa` |
+| Everything else | `/architect` |
+
 ### Building Blocks
 
 Use these individually for manual step-by-step control, or let the orchestrators call them automatically.
@@ -143,9 +175,11 @@ These run all phases end-to-end. Pass `--no-gemini` to skip the Gemini audit ste
 
 Full architectural design pipeline — use for new features or significant design decisions.
 
-```
+```bash
 /architect "add a plugin system to the CLI"
 /architect "design a caching layer for the database" --no-gemini
+/architect "migrate from REST to GraphQL"
+/architect "add real-time notifications via WebSocket"
 ```
 
 **Phases:**
@@ -158,9 +192,11 @@ Full architectural design pipeline — use for new features or significant desig
 
 Adversarial test generation — use when building or hardening a test suite.
 
-```
+```bash
 /qa "write tests for the payments module"
 /qa "add integration tests for the REST API" --no-gemini
+/qa "achieve 80% coverage on the user service"
+/qa "test edge cases for the CSV parser"
 ```
 
 **Phases:**
@@ -172,13 +208,15 @@ Adversarial test generation — use when building or hardening a test suite.
 
 Bug fix and refactoring pipeline — use for fixing bugs or reducing technical debt.
 
-```
+```bash
 /refactor "fix the race condition in the job queue"
 /refactor "reduce coupling in the user service" --no-gemini
+/refactor "eliminate N+1 query in the orders endpoint"
+/refactor "fix memory leak in the file upload handler"
 ```
 
 **Phases:**
-1. **Diagnose** (haiku, isolated) — analyzes the problem and proposes 3 options (minimal patch / structural fix / rewrite) → `docs/refactor_candidates.md`
+1. **Diagnose** (haiku, isolated) — analyzes the problem and proposes 3 options → `docs/refactor_candidates.md`
 2. **Decide** (sonnet, isolated) — selects the best approach, writes a step-by-step plan → `docs/approved_fix.md`
 3. **Implement** (isolated) — applies the fix, runs tests; if tests fail and Gemini is enabled, calls Gemini for circuit-breaker diagnosis
 
@@ -189,6 +227,164 @@ Skills use `context: fork` — each phase spawns a completely fresh subagent wit
 ### Decision Logs
 
 Every orchestrator run writes a timestamped decision log to `docs/decisions/YYYYMMDD_HHMM_<slug>_<pipeline>.md`. These logs capture what was attempted, which option was chosen, and whether it succeeded. Later `/decide` runs read past logs to avoid repeating failed approaches.
+
+---
+
+## Examples
+
+### Interactive examples (`claude-box`)
+
+Start a session, then type any of these at the Claude Code prompt:
+
+```bash
+cd ~/my-python-api
+claude-box
+
+# --- inside the claude-box session ---
+
+# Design and build a new feature end-to-end
+/architect "add OAuth2 social login (Google + GitHub)"
+
+# Fix a known bug with three proposed solutions to choose from
+/refactor "fix: users can bypass rate limiting by rotating IPs"
+
+# Generate a hardened test suite with Gemini red-teaming the gaps
+/qa "write comprehensive tests for the authentication module"
+
+# Run the full task list from tasks.md, one branch per task
+/gm --tasks tasks.md
+
+# Run task list with an extra adversarial QA pass before each merge
+/gm --tasks tasks.md --qa
+
+# Decompose a free-text brief into tasks and execute all of them
+/gm "add pagination to the API, add request logging middleware, fix the broken CSV export"
+
+# Step-by-step manual pipeline: brainstorm → you review → decide → implement
+/brainstorm architect "replace synchronous job processing with a queue"
+# (review docs/architecture_candidates.md, edit if needed)
+/decide architect "replace synchronous job processing with a queue"
+# (review docs/approved_architecture.md)
+/implement architect
+
+# Just implement a spec you already wrote at docs/approved_architecture.md
+/implement architect
+
+# Get a Gemini second opinion on a set of candidates you already brainstormed
+/geminiapi architect-critique "add a plugin system"
+
+# View the decision log from the last architect run
+/logging read architect
+```
+
+### Autonomous examples (`claude-yolo`)
+
+These run entirely without you — `claude-yolo` passes the task to Claude and manages rate limits, retries, and Gemini audits automatically.
+
+```bash
+# ----- Bug fixes -----
+
+# Fix failing tests and commit the result
+claude-yolo "run the test suite, diagnose every failure, fix them, and commit"
+
+# Fix a specific reported bug
+claude-yolo "Fix: the /export endpoint returns 500 when the date range spans a DST boundary"
+
+# Fix performance — profile, identify bottleneck, patch
+claude-yolo "the search endpoint takes >2s on datasets over 10k rows — find and fix the bottleneck"
+
+
+# ----- New features -----
+
+# Build a new feature with full architectural pipeline
+claude-yolo "/architect add webhook support so external services can subscribe to order events"
+
+# Add an endpoint and its tests in one pass
+claude-yolo "/architect add a GET /users/:id/activity endpoint that returns paginated audit logs"
+
+# Add a new CLI command
+claude-yolo "/architect add a --dry-run flag to the migration command"
+
+
+# ----- Test coverage -----
+
+# Harden an existing module's tests
+claude-yolo "/qa write comprehensive tests for the billing module, targeting 90% line coverage"
+
+# Red-team the auth system
+claude-yolo "/qa test the authentication module for token expiry edge cases, concurrent session handling, and brute-force scenarios"
+
+# Add contract tests between services
+claude-yolo "/qa add contract tests between the orders service and the inventory service"
+
+
+# ----- Refactoring -----
+
+# Extract shared logic and clean up coupling
+claude-yolo "/refactor extract the duplicated database retry logic into a shared helper in lib/"
+
+# Modernize an old module
+claude-yolo "/refactor migrate the user service from callbacks to async/await"
+
+# Reduce memory usage
+claude-yolo "/refactor the batch processor loads entire datasets into memory — refactor to stream in chunks"
+
+
+# ----- Multi-task with /gm (fully hands-off) -----
+
+# Run every unchecked item in tasks.md autonomously, one branch per task
+claude-yolo "/gm --tasks tasks.md"
+
+# Same, but with adversarial QA before every merge
+claude-yolo "/gm --tasks tasks.md --qa"
+
+# Give a free-text brief; gm decomposes it into tasks and runs them all
+claude-yolo "/gm add JWT authentication, add request-rate limiting, write tests for both, fix the broken logout endpoint"
+
+# Skip Gemini (faster, cheaper for prototyping)
+claude-yolo "/gm --tasks tasks.md --no-gemini"
+
+
+# ----- With model overrides -----
+
+# Use Haiku for fast/cheap tasks
+claude-yolo "add docstrings to every public function in src/" claude-haiku-4-5
+
+# Use Opus for deep architectural work
+claude-yolo "/architect redesign the data pipeline to handle 10x throughput" claude-opus-4-8
+
+# Use Fable for creative/generative tasks
+claude-yolo "write the user-facing help text and error messages for all CLI commands" claude-fable-5
+
+
+# ----- Compound / multi-step -----
+
+# Audit security, fix issues, write regression tests, all in one command
+claude-yolo "audit src/ for SQL injection and XSS vulnerabilities, fix every instance you find, then write regression tests that would catch them"
+
+# Migrate and verify
+claude-yolo "migrate the ORM models from SQLAlchemy 1.x to 2.0 style, update all queries, and make sure the test suite still passes"
+
+# Build + document
+claude-yolo "/architect add a plugin API, then update README.md with usage examples and the plugin contract"
+```
+
+### Using `tasks.md` for batch work
+
+Create a `tasks.md` in your project root and run `/gm --tasks tasks.md` (or `claude-yolo "/gm --tasks tasks.md"`) to execute the whole list hands-off. The GM checks off each task as it merges.
+
+```markdown
+# Sprint tasks
+
+- [ ] Add: user profile photo upload with S3 storage
+- [ ] Add: email verification on signup
+- [ ] Fix: password reset link expires too quickly (currently 5 min, should be 24 h)
+- [ ] Fix: duplicate notification emails sent on concurrent logins
+- [ ] QA: write tests for the file upload pipeline
+- [ ] QA: test email sending with invalid addresses and bounces
+```
+
+Each item becomes its own git branch (`gm/YYYYMMDD-HHMM-<slug>`). Successful items are merged and checked off; failed items are left on their branches for you to inspect.
 
 ---
 
@@ -265,6 +461,7 @@ docker build -t claude-sandbox -f Dockerfile.claude .
 - **Commit before `claude-yolo`** — the container has full read/write access to your project directory. Stash or commit your work first.
 - **Rate limits** — `claude-yolo` handles Pro rate limits automatically, but very long tasks may exhaust multiple quota windows.
 - **`~/.claude` is shared** — the container reads and writes to your host's `~/.claude/` directory, so session history is shared between your host Claude Code and the sandbox.
+- **Failed branches are safe** — `/gm` never deletes a failed branch. Run `git branch | grep gm/` to list them, `git checkout <branch>` to inspect, `git branch -D <branch>` to discard.
 
 ---
 
