@@ -50,9 +50,15 @@ Hands-off coding engine — the top-level orchestrator for multi-task projects.
 - `--qa` — second test layer: adversarial `/qa` pass after each architect/refactor success
 - `--no-gemini` — passed through to all sub-skills
 
-**Outputs:** Merged commits on base branch; failed branches preserved as `gm/*`; updated `tasks.md` checkboxes; summary table
+**Outputs:** Merged commits on base branch; failed branches preserved as `gm/*`; updated `tasks.md` checkboxes; summary table; `gm-status.md` (live progress file); decision log in `docs/decisions/`
 
 **Design:** Tasks run sequentially — each successful merge updates the base so later tasks build on earlier work. Failed tasks don't block the rest of the list.
+
+**Progress visibility (in `claude-yolo` mode):** The GM writes `gm-status.md` after every task. Open a second terminal and run:
+```bash
+cat gm-status.md                        # current status table
+cat docs/decisions/*gm*.md | tail -40  # last 40 lines of the decision log
+```
 
 ---
 

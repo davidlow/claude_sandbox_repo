@@ -386,6 +386,23 @@ Create a `tasks.md` in your project root and run `/gm --tasks tasks.md` (or `cla
 
 Each item becomes its own git branch (`gm/YYYYMMDD-HHMM-<slug>`). Successful items are merged and checked off; failed items are left on their branches for you to inspect.
 
+#### Checking progress mid-run
+
+`/gm` writes `gm-status.md` to your project root after every task. While it's running under `claude-yolo`, open a second terminal in the same directory:
+
+```bash
+cat gm-status.md                         # live task table — updates after each task completes
+cat docs/decisions/*gm*.md | tail -40    # decision log: branch created, skill outcome, merge/fail events
+ls gm/ 2>/dev/null || git branch | grep gm/  # see what branches exist so far
+```
+
+All pipeline skills (`/architect`, `/qa`, `/refactor`) also write timestamped decision logs to `docs/decisions/` throughout their runs:
+
+```bash
+ls -lt docs/decisions/                   # most recent first
+cat docs/decisions/<latest>.md           # full log for a single run
+```
+
 ---
 
 ## Gemini Cross-Model Audit

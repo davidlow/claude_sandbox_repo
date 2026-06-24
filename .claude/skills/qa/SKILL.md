@@ -36,8 +36,14 @@ Invoke `/implement` with a test-writing task:
 After it returns, check the return message:
 
 **On success (reported "✅ Implementation complete — all tests passing"):**
+
+List any new test files created:
+```bash
+git diff --name-only HEAD | grep -E '(test|spec)' || true
 ```
-/logging note <LOG_FILE> "Phase 1: Test Generation" "Tests written and passing"
+
+```
+/logging note <LOG_FILE> "Phase 1: Test Generation" "Tests written and passing — new/modified test files: <list from git diff, or 'see working tree'>"
 ```
 Proceed to Gemini audit.
 
@@ -60,14 +66,20 @@ Only if `gemini_enabled=true`:
 This is **non-fatal**.
 
 If `tests/gemini_missing_coverage.md` was created:
+
+Count the missing test cases identified (grep for numbered list items):
+```bash
+grep -c '^\s*[0-9]\+\.' tests/gemini_missing_coverage.md 2>/dev/null || echo "unknown"
 ```
-/logging note <LOG_FILE> "Gemini QA Audit" "completed — tests/gemini_missing_coverage.md"
+
+```
+/logging note <LOG_FILE> "Gemini QA Audit" "completed — <N> missing cases identified → tests/gemini_missing_coverage.md"
 ```
 Proceed to Phase 2.
 
 If the file was not created:
 ```
-/logging note <LOG_FILE> "Gemini QA Audit" "skipped or failed"
+/logging note <LOG_FILE> "Gemini QA Audit" "skipped or failed — no missing coverage file produced"
 ```
 Finalize log based on Phase 1 outcome:
 ```

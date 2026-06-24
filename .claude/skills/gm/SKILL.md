@@ -9,6 +9,21 @@ allowed-tools: Read, Write, Bash(date *), Bash(git checkout*), Bash(git merge*),
 
 You are orchestrating a hands-off coding engine. You decompose a task list into discrete units of work, implement each in an isolated git branch using the appropriate pipeline skill, verify with layered testing, and merge to the base branch only when all tests pass.
 
+## Progress visibility
+
+You write two files continuously throughout the run so the user can check status from a second terminal at any time:
+
+- **`gm-status.md`** — live table updated after each task; the quickest way to see current state
+- **`docs/decisions/<timestamp>_gm_<slug>.md`** — decision log capturing all per-task events
+
+To check progress while running in `claude-yolo`:
+```bash
+cat gm-status.md          # live status table
+/logging read gm          # decision log summary (inside claude-box)
+```
+
+---
+
 ## Step 1: Parse Arguments
 
 From `$ARGUMENTS`, extract:
@@ -25,7 +40,7 @@ Set:
 
 Announce: "🗂️ General Manager starting"
 
-## Step 2: Capture Base Branch
+## Step 2: Capture Base Branch and Initialize Logging
 
 ```bash
 BASE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -39,6 +54,17 @@ Check for uncommitted changes:
 git status --porcelain
 ```
 If output is non-empty, warn: "⚠️ Working tree has uncommitted changes — feature branches will be created from current (potentially dirty) state."
+
+Initialize the decision log — use the task file name or the first 60 chars of free_text as the description:
+```
+/logging init gm <description> claude-sonnet-4-6
+```
+Capture the returned file path as `LOG_FILE`.
+
+Log the base branch and flags:
+```
+/logging note <LOG_FILE> "Configuration" "Base: <BASE_BRANCH> | QA layer: <qa_layer> | Gemini: <enabled/disabled>"
+```
 
 ## Step 3: Build Task List
 
@@ -61,10 +87,31 @@ Print the task plan:
   3. [qa]        Write tests for payment module
 ```
 
+Log the full task plan:
+```
+/logging note <LOG_FILE> "Task Plan" "N tasks identified: 1. [architect] <task1> | 2. [refactor] <task2> | ..."
+```
+
+Write the initial `gm-status.md` with all tasks listed as pending:
+
+```markdown
+# GM Status
+
+**Started:** <timestamp>
+**Base branch:** <BASE_BRANCH>
+**Progress:** 0 / N tasks complete
+
+| # | Skill | Task | Branch | Status |
+|---|-------|------|--------|--------|
+| 1 | architect | Add user authentication | pending | ⏳ pending |
+| 2 | refactor | Fix login session timeout | pending | ⏳ pending |
+| 3 | qa | Write tests for payment module | pending | ⏳ pending |
+```
+
 ## Step 4: Execute Tasks
 
 Initialize a results tracking table (in memory):
-- `results`: array of `{task, branch, status}` objects
+- `results`: array of `{task, branch, skill, status}` objects
 
 For each task in order:
 
@@ -78,7 +125,18 @@ BRANCH="gm/${DATE}-${SLUG}"
 git checkout -b "$BRANCH"
 ```
 
-If `git checkout -b` fails, log `❌ Could not create branch for task: <task>`, add to results as failed, and continue to next task (staying on base branch).
+If `git checkout -b` fails, log:
+```
+/logging note <LOG_FILE> "Task N: Branch" "❌ Could not create branch — skipped: <task>"
+```
+Update `gm-status.md` row N to `❌ branch failed`, add to results as failed, and continue to next task (staying on base branch).
+
+On success, log:
+```
+/logging note <LOG_FILE> "Task N: Branch" "✅ Created <branch>"
+```
+
+Update `gm-status.md` row N: change `pending` to `⚙️ running [skill-type]` and fill in the branch name.
 
 Announce: "🌿 Branch created: $BRANCH"
 Announce: "⚙️  Running /[skill-type]: <task>"
@@ -95,6 +153,11 @@ Wait for the skill to complete. Note whether the final output contains:
 - `✅` and "complete" or "passing" → **primary_success = true**
 - `❌` or "failing" or "failed" → **primary_success = false**
 
+Log the outcome:
+```
+/logging note <LOG_FILE> "Task N: <skill-type> result" "✅ success — <task>" (or "❌ failed — <task>")
+```
+
 ### 4c. QA Layer (optional second pass)
 
 Only if `qa_layer=true` AND `primary_success=true` AND the skill type was `architect` or `refactor`:
@@ -107,6 +170,11 @@ Note the outcome:
 - `✅` → **qa_success = true**
 - `❌` → **qa_success = false**
 
+Log:
+```
+/logging note <LOG_FILE> "Task N: QA layer" "✅ passed" (or "❌ failed")
+```
+
 Overall task success = `primary_success AND (qa_layer is false OR skill was qa OR qa_success)`.
 
 ### 4d. Merge or Preserve
@@ -117,9 +185,17 @@ git checkout "$BASE_BRANCH"
 git merge --no-ff "$BRANCH" -m "gm: <task-text>"
 ```
 
-If `git merge` fails (conflict), log: "⚠️ Merge conflict on task <N>: <task-text> — branch preserved: $BRANCH" and treat as failed.
+If `git merge` fails (conflict):
+```
+/logging note <LOG_FILE> "Task N: Merge" "⚠️ Conflict — branch preserved: <branch>"
+```
+Update `gm-status.md` row N to `⚠️ merge conflict`. Treat as failed.
 
-On clean merge: record `{task: <task-text>, branch: $BRANCH, status: "✅ merged"}`.
+On clean merge:
+```
+/logging note <LOG_FILE> "Task N: Merge" "✅ Merged to <BASE_BRANCH>"
+```
+Record `{task, branch, skill, status: "✅ merged"}`.
 
 If `tasks_file` exists, update its checkbox: change `- [ ] <task-text>` to `- [x] <task-text>` using sed.
 
@@ -128,13 +204,41 @@ If `tasks_file` exists, update its checkbox: change `- [ ] <task-text>` to `- [x
 git checkout "$BASE_BRANCH"
 ```
 
-Leave the failed branch alive. Record `{task: <task-text>, branch: $BRANCH, status: "❌ failed — branch preserved"}`.
+Leave the failed branch alive.
+```
+/logging note <LOG_FILE> "Task N: Merge" "❌ Not merged — branch preserved: <branch>"
+```
+Record `{task, branch, skill, status: "❌ failed — branch preserved"}`.
 
 Log immediately: "❌ Task failed — branch preserved for review: $BRANCH"
 
 Continue to the next task.
 
-## Step 5: Summary Report
+**After every task (success or failure):** rewrite `gm-status.md` with the full updated results table so the user can check progress at any time:
+
+```markdown
+# GM Status
+
+**Started:** <timestamp>
+**Base branch:** <BASE_BRANCH>
+**Progress:** <done> / <total> tasks complete (last updated: <HH:MM>)
+
+| # | Skill | Task | Branch | Status |
+|---|-------|------|--------|--------|
+| 1 | architect | Add user authentication | gm/20260624-0910-add-user-auth | ✅ merged |
+| 2 | refactor | Fix login session timeout | gm/20260624-0935-fix-login-ses | ❌ failed |
+| 3 | qa | Write tests for payment module | pending | ⏳ pending |
+```
+
+## Step 5: Summary Report and Finalize Log
+
+Count successes and failures from the results table.
+
+Finalize the decision log:
+```
+/logging outcome <LOG_FILE> <success|failed> "<N> merged, <M> failed"
+```
+Use `success` if all tasks merged, `failed` if any failed.
 
 After all tasks have been processed, print:
 
@@ -153,9 +257,16 @@ If any tasks failed:
 - List the failed branches explicitly
 - Print: "To inspect a failed implementation: `git checkout <branch>`"
 - Print: "To discard a failed branch: `git branch -D <branch>`"
+- Print: "Decision log: `<LOG_FILE>`"
 
 If all tasks succeeded:
 - Print: "✅ All tasks complete and merged to <BASE_BRANCH>"
+- Print: "Decision log: `<LOG_FILE>`"
+
+Update `gm-status.md` one final time with the completed state, replacing the header with:
+```
+**Status: COMPLETE** — <N> merged, <M> failed
+```
 
 ## Notes
 
@@ -164,3 +275,4 @@ If all tasks succeeded:
 - The QA layer (`--qa`) invokes `/qa` as an adversarial red-team pass AFTER the primary pipeline succeeds. This is the second test layer. Merge only happens if both layers pass.
 - Git branches provide the isolation "sandbox" — each feature is contained, rollback is `git checkout <base>`, and failures never touch working code on the base branch.
 - Sub-skills run with `context: fork` — they have no memory of each other. All coordination happens through files (`docs/`, `tests/`) and the git working tree.
+- `gm-status.md` is intentionally left on disk after completion as a record. Delete it manually if not needed.
