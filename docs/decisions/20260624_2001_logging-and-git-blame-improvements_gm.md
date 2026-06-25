@@ -1,0 +1,38 @@
+# gm: logging-and-git-blame-improvements
+
+**Date:** 2026-06-24 20:01
+**Pipeline:** gm
+**Model:** claude-sonnet-4-6
+**Status:** in-progress
+
+## Task
+
+logging-and-git-blame-improvements
+
+## Task 2: architect result
+
+✅ success — Real-time progress logging. Implemented progress-lib.sh, hooked into both launch scripts, added /logging progress action. 18 new tests + 74 adversarial tests passing.
+
+## Configuration
+
+Base: master | QA layer: true | Gemini: enabled
+
+## Task Plan
+
+5 tasks identified: 1. [qa] Audit codebase for logging problems/missing features | 2. [architect] Real-time progress logging during claude-box/claude-yolo | 3. [architect] Retrospective log search by date/commit | 4. [architect] Enhanced git-blame using decision logs | 5. [architect] Auto-initialize logs in new workspaces
+
+## Task 1: qa result
+
+✅ success — Audit codebase for logging problems/missing features. 116 tests written and passing. Missing features documented as skip markers.
+
+## Task 1: Merge
+
+✅ Merged to master
+
+## Task 2: Branch
+
+✅ Created gm/20260624-2013-real-time-progress-logging-claude-box-yolo
+
+## Task 2: QA layer
+
+✅ passed — 74 adversarial tests, known bugs documented (newlines/backslashes in DETAIL break JSON)
