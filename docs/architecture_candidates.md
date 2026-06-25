@@ -1,82 +1,74 @@
-# Brainstorm: Real-Time Progress Logging for claude-box and claude-yolo
+# Brainstorm: Enhanced Git-Blame Command with Decision Log Context
 
-**Generated:** 2026-06-24
+**Generated:** 2026-06-25
 
-## Option A: Minimal Wrapper with Live Log File
+## Option A: Git-Native Wrapper with Timestamp Matching
 
-**Summary:** Wrap `claude` invocations with a progress-tracking script that writes state to a single shared log file as Claude executes, without modifying launch scripts or integrating deeply with the logging infrastructure.
+**Summary:** Thin wrapper around `git blame` that parses commit timestamps and performs a straightforward filesystem scan of decision logs to find related entries by timestamp proximity.
 
 **Key design decisions:**
-- Create a new `claude-progress.log` file in `/workspace` (shared across host/container via Docker volume)
-- Implement a thin bash wrapper (`lib/progress-wrapper.sh`) that intercepts `claude` command calls
-- Wrapper writes initial state (timestamp, task, model, phase="setup") at start, then polls Claude's TUI output via `tee` to detect state changes
-- Parse Claude Code's output patterns for activity indicators (e.g., "thinking", tool invocation messages, skill transitions) and update log in real-time
-- Wrapper runs `claude` via `tee` to capture both stdout/stderr, detecting patterns and updating the log file on each pattern match
-- No changes to `launch-interactive.sh` or `launch-scripted.sh`; wrapper can be sourced or invoked as a pre-command
+- Wraps existing `git blame` command (shell out to native git) rather than reimplementing blame logic
+- Parses `git blame` output line-by-line to extract commit hash and date
+- Scans decision log filenames (YYYYMMDD_HHMM format) in a chronological window around commit timestamp
+- Lightweight regex matching on filenames; no full-text indexing
+- Returns raw git blame output plus annotated decision log excerpts appended below
+- Does not cache or persist log metadata; rescans on each query
 
 **Trade-offs:**
-- Extensibility: Low — pattern matching is brittle; if Claude Code's output format changes, the regex patterns break
-- Complexity: Low — minimal code, easy to understand and test; just string matching and file writes
-- Blast radius: Very small — isolated to a new wrapper script; existing scripts unaffected
+- Extensibility: Very limited; each query rescans filesystem; no preprocessing or caching
+- Complexity: Minimal; straightforward bash script with `git blame` pipe and simple date arithmetic
+- Blast radius / risk: Zero impact on existing tools; pure wrapper with no persistence
 
-**Risks or prerequisites:**
-- Depends on heuristics from Claude Code's output; doesn't have direct integration with Claude's internals
-- May miss some state transitions if output is buffered or delayed
-- Single log file approach means concurrent runs overwrite each other (unsuitable for `claude-yolo` retries or multiple interactive sessions)
-- Requires careful regex tuning to avoid false positives
+**Risks or prerequisites:** 
+- Performance degrades with large numbers of decision logs (hundreds+)
+- Simple timestamp matching may miss related logs if there's a time gap between commit and log creation
+- No fuzzy matching on commit message or author; relies purely on timing proximity
 
 ---
 
-## Option B: Structured Integration with Logging Skill and Launch Scripts
+## Option B: Cached Decision Log Index with Smart Heuristics
 
-**Summary:** Extend the existing `/logging` skill and `docs/decisions/` infrastructure to emit real-time progress updates that a user can tail, by hooking progress callbacks into both launch scripts and having the logging skill write to a unified progress feed.
+**Summary:** Build an optional JSON/SQLite metadata index of decision logs (indexed by commit hash, phase, date range, topics) that gets lazily constructed and cached. The tool queries this index and uses multi-factor heuristics (timestamp, commit message keywords, branch name, phase context) to surface relevant decisions.
 
 **Key design decisions:**
-- Extend `/logging` skill with a new action: `progress [start|update|end]` that writes timestamped progress events to `docs/progress/current.jsonl` (JSON Lines format with one event per line)
-- Each progress event: `{"timestamp": "2026-06-24T14:30:42Z", "phase": "brainstorm", "status": "active", "detail": "generating 3 approaches", "task": "..."})`
-- Modify `launch-interactive.sh` and `launch-scripted.sh` to invoke `/logging progress start` at the beginning with task metadata
-- Pass `PROGRESS_LOG_PATH=/workspace/docs/progress/current.jsonl` to the container as an env var
-- Inside the container, create a shell hook that Claude Code can invoke (or create a `.claude/commands/` alias that logs progress mid-run)
-- User can `tail -f /workspace/docs/progress/current.jsonl | jq .` to see live updates
-- Integrate with decision logs: link progress log entries to the corresponding decision log file
-- On completion, move `current.jsonl` to `docs/progress/YYYYMMDD_HHMM_<task-slug>.jsonl` and finalize via `/logging outcome`
+- Generate a `.claude/decision-log-index.json` on first run (or on-demand with `--rebuild-index`)
+- Index includes commit-to-logs reverse mapping, extracted keywords/phase tags from log content, date ranges
+- When querying a file:line, first identify the commit, then consult the index for logs mentioning that commit hash, phase, or keyword tokens
+- Fall back to timestamp windows if no index entry matches
+- Return ranked results (high confidence first) based on heuristic match score
+- Use `lib/log-search.sh` as foundation; extend it with indexing capability
 
 **Trade-offs:**
-- Extensibility: High — JSON Lines format is future-proof; new fields can be added without breaking existing parsers
-- Complexity: Medium — requires changes to launch scripts, extending the logging skill, and ensuring env var propagation through Docker
-- Blast radius: Moderate — touches launch scripts (critical infrastructure) but changes are additive, not destructive
+- Extensibility: High; index can be extended with new metadata (tags, topics, severity); supports incremental updates
+- Complexity: Moderate; requires index generation, maintenance logic, and ranking heuristic tuning
+- Blast radius / risk: Adds a `.claude/` artifact (in .gitignore) that must stay in sync with decision logs
 
 **Risks or prerequisites:**
-- Launch scripts must reliably pass `PROGRESS_LOG_PATH` into the container and ensure `/workspace/docs/progress/` directory exists
-- Requires Claude Code skills to have a way to invoke progress updates; could use a slash command or a library function that Claude calls
-- If Claude is not aware of the progress mechanism, updates will be sparse (only at launch start/end); richer updates require Claude to explicitly log them
+- Index can become stale if logs are manually edited or deleted
+- Multi-factor heuristics may return false positives if keywords overlap across unrelated decisions
+- Requires upfront index generation time on first run (can be mitigated with --lazy-index flag)
 
 ---
 
-## Option C: Full Observability with Daemon and Polling
+## Option C: Full-Text Search Engine with Schema-Based Extraction
 
-**Summary:** Run a lightweight daemon process inside the container that polls Claude Code's process state and writes real-time progress by inspecting file handles, memory usage, and process state, combined with log file analysis; expose the progress via a REST API or Unix socket that the host can query.
+**Summary:** Treat decision logs as structured documents in a lightweight search database (grep-based inverted index or SQLite FTS5 full-text search). Extract decision log schema fields (commit hashes, branch, phase, decision statement, implementation notes) and index them. Query interface supports both simple "why line 42" and advanced Boolean queries (e.g., "phase:decide AND branch:main AND keyword:auth").
 
 **Key design decisions:**
-- Create `lib/progress-daemon.sh` — a background process spawned by the launch scripts that continuously monitors Claude Code's process
-- Daemon polls `/proc/<claude-pid>/` (Linux procfs) to get CPU usage, memory, number of open file handles, and recent activity
-- Daemon also tails `.claude/logs/` (if Claude Code maintains logs) to extract high-level state
-- Daemon writes structured progress data to a Unix socket at `/tmp/claude-progress.sock` (accessible from host via Docker volume or network)
-- Host-side command `claude-progress` reads from the socket and displays current state
-- Daemon persists progress events to `docs/progress/current.jsonl` (same as Option B) for historical record
-- On Claude exit, daemon cleans up and finalizes the log entry
-- Use structured formats (JSON) for all output to ensure machine-parseable and human-readable results
+- Parse decision log files into structured fields (date, pipeline, model, task, commits, decision, rationale, links)
+- Build an FTS5 (SQLite full-text search) database or grep-based inverted index of logs
+- Support both natural language "explain line 42" and structured queries ("--phase architect --commit abc123")
+- Return results ranked by relevance (BM25-style scoring or pattern matching confidence)
+- Offer rich output formats (JSON, markdown, YAML) for downstream consumption
+- Integrate with `lib/log-search.sh` as a backend; provide unified CLI
 
 **Trade-offs:**
-- Extensibility: Very High — daemon-based architecture is modular; easy to add new metrics (CPU, memory, handle count) and parsers for new Claude Code output formats
-- Complexity: High — requires process monitoring, procfs parsing, socket management, and careful cleanup on exit
-- Blast radius: Moderate — daemon runs separately from main Claude process; if daemon crashes, Claude continues unaffected
+- Extensibility: Very high; can extend query language, add new indexed fields, add output formats; supports programmatic query from other tools
+- Complexity: High; requires schema definition, index maintenance, query parser, ranking algorithm
+- Blast radius / risk: Database file artifact; more moving parts to maintain; potential for index corruption
 
 **Risks or prerequisites:**
-- Requires understanding of Claude Code's internal logging structure (if it has one) — may not be documented
-- Linux procfs availability is assumed (not portable to macOS without significant rework)
-- Daemon must be carefully designed to avoid resource leaks (e.g., unclosed sockets, lingering processes)
-- Socket permissions and cleanup on unclean shutdown (e.g., SIGKILL) need careful handling
-- Higher operational overhead; more code to test and maintain
-
----
+- Requires consistent schema in decision log files (may need migrations if format changes)
+- SQLite dependency (or complex grep-based index maintenance)
+- Query parser may be confusing for users if not well-documented
+- Schema extraction may fail on malformed or legacy logs

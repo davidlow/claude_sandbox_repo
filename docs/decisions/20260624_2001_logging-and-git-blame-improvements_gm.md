@@ -44,3 +44,19 @@ Base: master | QA layer: true | Gemini: enabled
 ## Task 3: QA layer
 
 ✅ passed — 81 adversarial tests for log-search edge cases
+
+## Task 3: Merge
+
+✅ Merged to master
+
+## Task 4: Branch
+
+✅ Created gm/20260625-0109-enhanced-git-blame-using-decision-logs
+
+## Task 4: architect result
+
+✅ success — Enhanced git-blame why.sh. Thin wrapper over git blame + lib/log-search.sh. Parses file:line and file:function. 15 tests + 33 adversarial tests passing.
+
+## Task 4: QA layer
+
+✅ passed — 33 adversarial tests for why.sh edge cases
