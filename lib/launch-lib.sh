@@ -148,6 +148,20 @@ run_headless_phase() {
 }
 
 # ---------------------------------------------------------------------------
+# ensure_logging_dirs
+# Creates docs/decisions/ and docs/progress/ in the current working directory
+# (the user's project root) if they do not already exist. Idempotent.
+# Non-fatal: emits a warning to stderr on failure and returns 0.
+# Silent on success — no stdout output so tee pipelines are unaffected.
+# ---------------------------------------------------------------------------
+ensure_logging_dirs() {
+    if ! mkdir -p docs/decisions docs/progress 2>/dev/null; then
+        echo "[warn] Could not create logging dirs (docs/decisions, docs/progress)" >&2
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # ensure_claude_md_current <container_name> [model]
 # Ensures CLAUDE.md exists and reflects recent git commits before a Gemini call.
 #

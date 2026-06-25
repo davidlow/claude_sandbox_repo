@@ -38,6 +38,7 @@ UNIT_TESTS=(
     test_log_search_adversarial.sh
     test_why.sh
     test_why_adversarial.sh
+    test_ensure_logging_dirs.sh
 )
 
 # Legacy integration tests (Docker + credentials, run the actual Claude binary)

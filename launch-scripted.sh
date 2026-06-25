@@ -245,6 +245,7 @@ run_gemini_audit() {
 # whatever context is available. .claude/ is wiped by run_headless_phase.
 # ==============================================================================
 ensure_claude_md_current "${CONTAINER_NAME}-setup"
+ensure_logging_dirs
 
 # ==============================================================================
 # MAIN RETRY LOOP
