@@ -76,6 +76,26 @@ Append to the log file:
 
 ---
 
+## Action: `progress`
+
+**Usage:** `progress <phase> <status> <detail>`
+
+Appends a real-time progress event to `docs/progress/current.jsonl` so a user monitoring a second terminal can see what Claude is actively doing.
+
+1. Run `mkdir -p docs/progress`
+2. Construct the JSON event:
+   - `timestamp`: run `date -u "+%Y-%m-%dT%H:%M:%SZ"`
+   - `source`: `"skill"`
+   - `phase`: first argument
+   - `status`: second argument
+   - `detail`: third argument (truncate to 200 chars if longer)
+   - `task`: value of `$ORIGINAL_TASK_PROMPT` env var, truncated to 80 chars; or `""` if unset
+3. Append a single JSON line to `docs/progress/current.jsonl` using the format:
+   `{"timestamp":"<val>","source":"skill","phase":"<val>","status":"<val>","detail":"<val>","task":"<val>"}`
+4. Use Bash `echo` or `printf` — do NOT require `jq`.
+
+---
+
 ## Action: `outcome`
 
 **Usage:** `outcome <log-file> <status> [notes]`

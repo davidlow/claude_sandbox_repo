@@ -56,6 +56,7 @@ fi
 
 # Load pure helper functions (also sourced by the test suite).
 source "$(dirname "$0")/lib/launch-lib.sh"
+source "$(dirname "$0")/lib/progress-lib.sh"
 
 # ==============================================================================
 # ARGUMENT PARSING
@@ -259,6 +260,8 @@ ATTEMPT=1
 SUCCESS=false
 SESSION_STARTED=false
 
+write_progress_event "setup" "started" "Launching $CHOSEN_MODEL for task" "${ORIGINAL_TASK_PROMPT:0:80}"
+
 while [ $ATTEMPT -le $MAX_RETRIES ]; do
     echo "🚀 [Attempt $ATTEMPT/$MAX_RETRIES] Launching $CHOSEN_MODEL..."
     echo "⏳ Context: ${MAX_CONTEXT_TOKENS} | Thinking: ${MAX_THINKING_TOKENS} | Timeout: ${MAX_MINUTES}m"
@@ -267,6 +270,7 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
     else
         echo "   Gemini audit: disabled"
     fi
+    write_progress_event "attempt-$ATTEMPT" "active" "Running claude --dangerously-skip-permissions (model: $CHOSEN_MODEL)" "${ORIGINAL_TASK_PROMPT:0:80}"
 
     set +e
     if [ "$SESSION_STARTED" = true ] && [ -d ".claude" ]; then
@@ -291,6 +295,7 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
 
     if [ $EXIT_CODE -eq 0 ]; then
         echo "✅ Task completed successfully on attempt $ATTEMPT."
+        write_progress_event "done" "completed" "Task finished successfully on attempt $ATTEMPT" "${ORIGINAL_TASK_PROMPT:0:80}"
         rm -f ".task_handoff.md" "GEMINI_ADVICE.md"
         SUCCESS=true
         break
@@ -319,6 +324,7 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
             TARGET_EPOCH=$(date -d "tomorrow $TARGET_TIME" +%s)
         TARGET_EPOCH=$(( TARGET_EPOCH + 300 ))   # 5-minute safety buffer
         TARGET_DISPLAY=$(date -d "@$TARGET_EPOCH" '+%H:%M:%S')
+        write_progress_event "rate-limit" "rate-limited" "Quota exhausted, waiting until $TARGET_DISPLAY" "${ORIGINAL_TASK_PROMPT:0:80}"
 
         docker kill "$CONTAINER_NAME" 2>/dev/null || true
         wait_for_quota "$TARGET_EPOCH" "$TARGET_DISPLAY"
@@ -362,6 +368,7 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
         fi
 
         echo "🧹 [RECOVERY] Attempting context compaction (Strategy A)..."
+        write_progress_event "compact" "retrying" "Attempting /compact (Strategy A)" "${ORIGINAL_TASK_PROMPT:0:80}"
 
         # Snapshot .claude/ size before the compaction attempt.
         BEFORE_SIZE=0
@@ -389,6 +396,7 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
         else
             echo "⚠️  Strategy A ineffective (${BEFORE_SIZE}K → ${AFTER_SIZE}K, exit ${COMPACT_CODE})."
             echo "   Running Strategy B+C: handoff capture then context reset..."
+            write_progress_event "handoff" "retrying" "Strategy A ineffective — running Strategy B+C (handoff + reset)" "${ORIGINAL_TASK_PROMPT:0:80}"
 
             # Strategy B: Run one final --continue pass asking Claude to write a
             # checkpoint. The workspace volume ensures the file survives even after
@@ -434,6 +442,7 @@ Continue the original task: ${ORIGINAL_TASK_PROMPT}"
 done
 
 if [ "$SUCCESS" = false ]; then
+    write_progress_event "done" "failed" "Task failed after $MAX_RETRIES attempts" "${ORIGINAL_TASK_PROMPT:0:80}"
     echo "❌ [FATAL ERROR] Task execution failed to resolve after $MAX_RETRIES attempts."
     if [ "$GEMINI_ENABLED" = true ] && [ -f "GEMINI_ADVICE.md" ]; then
         echo "💡 Gemini's last audit is saved in GEMINI_ADVICE.md for your review."

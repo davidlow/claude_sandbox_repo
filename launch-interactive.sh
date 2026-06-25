@@ -62,6 +62,9 @@ fi
 
 echo "🛡️  Spawning interactive sandbox using model: $CHOSEN_MODEL"
 
+source "$(dirname "$0")/lib/progress-lib.sh"
+write_progress_event "session" "started" "Interactive session starting (model: $CHOSEN_MODEL)" "interactive"
+
 docker run -it --rm \
   --name "$CONTAINER_NAME" \
   -v "$(pwd)":/workspace \
@@ -70,3 +73,4 @@ docker run -it --rm \
   -e CLAUDE_CODE_OAUTH_REFRESH_TOKEN="$OAUTH_REFRESH" \
   claude-sandbox \
   claude --model "$CHOSEN_MODEL"
+write_progress_event "session" "completed" "Interactive session ended" "interactive"
