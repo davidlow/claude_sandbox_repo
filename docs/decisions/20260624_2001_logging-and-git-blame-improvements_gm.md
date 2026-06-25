@@ -36,3 +36,11 @@ Base: master | QA layer: true | Gemini: enabled
 ## Task 2: QA layer
 
 ✅ passed — 74 adversarial tests, known bugs documented (newlines/backslashes in DETAIL break JSON)
+
+## Task 3: architect result
+
+✅ success — Retrospective log search. Implemented lib/log-search.sh with --date, --commit, --keyword, --and flags. Added /logging search action. 23 tests + 81 adversarial tests passing.
+
+## Task 3: QA layer
+
+✅ passed — 81 adversarial tests for log-search edge cases
