@@ -54,6 +54,14 @@ Building blocks (usable standalone):
 
 ## Architecture
 
+### Logging Directories
+
+Two directories are auto-created at launch time by both `launch-scripted.sh` and `launch-interactive.sh`:
+- `docs/decisions/` — timestamped Markdown logs (one per pipeline run). Created by `/logging init`; finalized by `/logging outcome`. Claude should call these at the start and end of any architect/qa/refactor pipeline run.
+- `docs/progress/` — real-time JSONL event stream (`current.jsonl`). Written by `/logging progress`. Users can `tail -f docs/progress/current.jsonl` in a second terminal to monitor active sessions.
+
+Claude does not need to create these directories manually — they exist before the container starts.
+
 ### Authentication flow
 `~/.claude/.credentials.json` (host) → OAuth tokens extracted by Python one-liner → injected as `CLAUDE_CODE_OAUTH_TOKEN` / `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` env vars into the container → bypasses Claude Code's first-run browser wizard.
 

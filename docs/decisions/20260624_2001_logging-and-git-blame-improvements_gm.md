@@ -60,3 +60,11 @@ Base: master | QA layer: true | Gemini: enabled
 ## Task 4: QA layer
 
 ✅ passed — 33 adversarial tests for why.sh edge cases
+
+## Task 5: architect result
+
+✅ success — Auto-initialize logs. Added ensure_logging_dirs() to launch-lib.sh, hooked into both launch scripts, updated /logging init and CLAUDE.md. 637 tests passing.
+
+## Task 5: QA layer
+
+✅ passed — 47 adversarial tests for ensure_logging_dirs coverage

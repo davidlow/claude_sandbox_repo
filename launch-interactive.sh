@@ -62,8 +62,10 @@ fi
 
 echo "🛡️  Spawning interactive sandbox using model: $CHOSEN_MODEL"
 
+source "$(dirname "$0")/lib/launch-lib.sh"
 source "$(dirname "$0")/lib/progress-lib.sh"
 write_progress_event "session" "started" "Interactive session starting (model: $CHOSEN_MODEL)" "interactive"
+ensure_logging_dirs
 
 docker run -it --rm \
   --name "$CONTAINER_NAME" \
