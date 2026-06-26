@@ -18,6 +18,7 @@ sudo usermod -aG docker "$USER"
 # 3. Ensure all scripts are executable
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 chmod +x "$REPO_DIR/launch-interactive.sh" \
+         "$REPO_DIR/launch-interactive-yolo.sh" \
          "$REPO_DIR/launch-scripted.sh" \
          "$REPO_DIR/setup-auth.sh" \
          "$REPO_DIR/entrypoint.sh" \
@@ -33,6 +34,10 @@ echo "🔗 Registering shell aliases in ~/.bashrc..."
 
 if ! grep -q "alias claude-box=" ~/.bashrc; then
     echo "alias claude-box='$REPO_DIR/launch-interactive.sh'" >> ~/.bashrc
+fi
+
+if ! grep -q "alias claude-box-yolo=" ~/.bashrc; then
+    echo "alias claude-box-yolo='$REPO_DIR/launch-interactive-yolo.sh'" >> ~/.bashrc
 fi
 
 if ! grep -q "alias claude-yolo=" ~/.bashrc; then
@@ -60,6 +65,7 @@ echo "  3. Bootstrap the sandbox credentials (once):"
 echo "       claude-box-auth"
 echo ""
 echo "  4. Launch a session from any project directory:"
-echo "       claude-box              # interactive (then use /architect, /qa, /refactor)"
+echo "       claude-box              # interactive (asks permission before commands)"
+echo "       claude-box-yolo         # interactive, auto-approves all commands"
 echo "       claude-yolo \"task\"      # fully autonomous, no manual intervention"
 echo "=========================================================="

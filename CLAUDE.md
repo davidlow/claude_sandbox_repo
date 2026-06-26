@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Docker sandbox that lets you run Claude Code autonomously using a Claude Pro OAuth session (no API key). Designed for Debian Linux and ChromeOS Linux (Crostini). The two main entry points are:
 
 - **`claude-box`** (`launch-interactive.sh`) — interactive Claude Code session with access to pipeline skills
+- **`claude-box-yolo`** (`launch-interactive-yolo.sh`) — same as `claude-box` but with `--dangerously-skip-permissions`; Claude never asks for confirmation before running commands
 - **`claude-yolo`** (`launch-scripted.sh`) — fully autonomous mode with `--dangerously-skip-permissions`, rate-limit auto-recovery, context compaction, and optional Gemini cross-model audit on failure
 
 ## Common Commands
@@ -23,6 +24,7 @@ docker build -t claude-sandbox -f Dockerfile.claude .
 
 # Launch an interactive session in the current directory
 ./launch-interactive.sh [model]          # or: claude-box [model]
+./launch-interactive-yolo.sh [model]     # or: claude-box-yolo [model]  (auto-approve all commands)
 
 # Launch autonomous mode
 ./launch-scripted.sh "task description" [model] [--no-gemini]  # or: claude-yolo
@@ -104,6 +106,7 @@ Pipeline skills (in `.claude/skills/`) use `context: fork` — each phase spawns
 | `install.sh` | One-time host setup: Docker install, image build, `~/.bashrc` aliases |
 | `setup-auth.sh` | One-time auth bootstrap: copies `.claude.json`, warms first-run state |
 | `launch-interactive.sh` | `claude-box` alias implementation |
+| `launch-interactive-yolo.sh` | `claude-box-yolo` alias — same as `claude-box` with `--dangerously-skip-permissions` |
 | `launch-scripted.sh` | `claude-yolo` alias: full retry/recovery/audit engine |
 | `lib/launch-lib.sh` | Pure helper functions sourced by pipeline scripts and the test suite |
 | `.claude/skills/` | Pipeline skills: `brainstorm`, `decide`, `implement`, `geminiapi`, `logging`, `architect`, `qa`, `refactor` |
