@@ -73,6 +73,7 @@ docker run -it --rm \
   -v "$HOME/.claude":/home/claudeuser/.claude \
   -e CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN" \
   -e CLAUDE_CODE_OAUTH_REFRESH_TOKEN="$OAUTH_REFRESH" \
+  -e GEMINI_API_KEY="${GEMINI_API_KEY:-}" \
   claude-sandbox \
   claude --model "$CHOSEN_MODEL"
 write_progress_event "session" "completed" "Interactive session ended" "interactive"
