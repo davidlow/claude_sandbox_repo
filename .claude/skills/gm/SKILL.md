@@ -174,14 +174,37 @@ Write the initial `docs/${TASK_ID}/overview.md`:
 
 | Step | Skill | Phase | Log | Status |
 |------|-------|-------|-----|--------|
+<!-- STEPS_END -->
+
+## Architecture
+
+| Artifact | Link | Status |
+|----------|------|--------|
+| Brainstorm candidates | [architecture_candidates.md](architecture/architecture_candidates.md) | ⏳ pending |
+| Approved design | [approved_architecture.md](architecture/approved_architecture.md) | ⏳ pending |
+| Fix spec | [approved_fix.md](architecture/approved_fix.md) | ⏳ pending |
+
+## Gemini Audit
+
+| Artifact | Link | Status |
+|----------|------|--------|
+| Architectural critique | [gemini_architectural_audit.md](gemini/gemini_architectural_audit.md) | ⏳ pending |
+
+## QA
+
+| Artifact | Link | Status |
+|----------|------|--------|
+| Missing coverage report | [gemini_missing_coverage.md](qa/gemini_missing_coverage.md) | ⏳ pending |
+
+## Decision Logs
+
+| Log | Pipeline | Status |
+|-----|----------|--------|
+<!-- LOGS_END -->
+
 ## Outcome
 
 *(pending)*
-```
-
-Export the task directory so sub-skills route their logs here:
-```bash
-export LOGGING_TASK_DIR="docs/${TASK_ID}"
 ```
 
 Announce: "📁 Task wiki: docs/${TASK_ID}/"
@@ -237,12 +260,12 @@ Log the outcome:
 /logging note <LOG_FILE> "Task N: <skill-type> result" "✅ success — <task>" (or "❌ failed — <task>")
 ```
 
-**Capture the log filename from `docs/.logging-current` BEFORE calling `/logging outcome`** (which deletes the sentinel). Append a row to `docs/${TASK_ID}/overview.md`:
+**Capture the phase log.** The sub-skill's `/logging outcome` writes the log path to `docs/.logging-last-completed` before deleting the active sentinel — so the path persists after the sub-skill exits:
 ```bash
-PHASE_LOG=$(cat docs/.logging-current 2>/dev/null || echo "")
+PHASE_LOG=$(cat docs/.logging-last-completed 2>/dev/null || echo "")
 LOG_FILENAME=$(basename "$PHASE_LOG")
-PHASE_STATUS=$( [[ "$primary_success" == "true" ]] && echo "done" || echo "failed" )
-sed -i "/^## Outcome/i | 1 | ${SKILL_TYPE} | primary | [log](decisions/${LOG_FILENAME}) | ${PHASE_STATUS} |" "docs/${TASK_ID}/overview.md"
+PHASE_STATUS=$( [[ "$primary_success" == "true" ]] && echo "✅ done" || echo "❌ failed" )
+LOG_LINK=$( [[ -n "$LOG_FILENAME" ]] && echo "[${LOG_FILENAME}](decisions/${LOG_FILENAME})" || echo "(log unavailable)" )
 ```
 
 **Copy phase artifacts and decision log into wiki:**
@@ -254,6 +277,35 @@ sed -i "/^## Outcome/i | 1 | ${SKILL_TYPE} | primary | [log](decisions/${LOG_FIL
 [[ -f docs/gemini_architectural_audit.md ]] && cp docs/gemini_architectural_audit.md "docs/${TASK_ID}/gemini/" || true
 [[ -f tests/gemini_missing_coverage.md ]] && cp tests/gemini_missing_coverage.md "docs/${TASK_ID}/qa/" || true
 ```
+
+**Update `docs/${TASK_ID}/overview.md` using the Edit tool.** Make each of the following replacements in order:
+
+1. **Pipeline Steps row** — replace the marker to append a table row:
+   - old_string: `<!-- STEPS_END -->`
+   - new_string (two lines): the new row `| 1 | <SKILL_TYPE> | primary | <LOG_LINK> | <PHASE_STATUS> |`, then `<!-- STEPS_END -->`
+
+2. **Decision Logs entry** — if `LOG_FILENAME` is non-empty, replace the marker:
+   - old_string: `<!-- LOGS_END -->`
+   - new_string (two lines): `| <LOG_LINK> | <SKILL_TYPE> | <PHASE_STATUS> |`, then `<!-- LOGS_END -->`
+
+3. **Architecture section** — for each file that was successfully copied, replace its row's `⏳ pending` with `✅ available`:
+   - If `docs/${TASK_ID}/architecture/architecture_candidates.md` exists:
+     replace `| Brainstorm candidates | [architecture_candidates.md](architecture/architecture_candidates.md) | ⏳ pending |`
+     with    `| Brainstorm candidates | [architecture_candidates.md](architecture/architecture_candidates.md) | ✅ available |`
+   - If `docs/${TASK_ID}/architecture/approved_architecture.md` exists:
+     replace `| Approved design | [approved_architecture.md](architecture/approved_architecture.md) | ⏳ pending |`
+     with    `| Approved design | [approved_architecture.md](architecture/approved_architecture.md) | ✅ available |`
+   - If `docs/${TASK_ID}/architecture/approved_fix.md` exists:
+     replace `| Fix spec | [approved_fix.md](architecture/approved_fix.md) | ⏳ pending |`
+     with    `| Fix spec | [approved_fix.md](architecture/approved_fix.md) | ✅ available |`
+
+4. **Gemini Audit section** — if `docs/${TASK_ID}/gemini/gemini_architectural_audit.md` exists:
+   replace `| Architectural critique | [gemini_architectural_audit.md](gemini/gemini_architectural_audit.md) | ⏳ pending |`
+   with    `| Architectural critique | [gemini_architectural_audit.md](gemini/gemini_architectural_audit.md) | ✅ available |`
+
+5. **QA section** — if `docs/${TASK_ID}/qa/gemini_missing_coverage.md` exists:
+   replace `| Missing coverage report | [gemini_missing_coverage.md](qa/gemini_missing_coverage.md) | ⏳ pending |`
+   with    `| Missing coverage report | [gemini_missing_coverage.md](qa/gemini_missing_coverage.md) | ✅ available |`
 
 ### 4d. QA Layer (optional second pass)
 
@@ -272,15 +324,26 @@ Log:
 /logging note <LOG_FILE> "Task N: QA layer" "✅ passed" (or "❌ failed")
 ```
 
-**Append a QA layer row to `docs/${TASK_ID}/overview.md`:**
+**Update the task wiki with QA results:**
 ```bash
-QA_LOG=$(cat docs/.logging-current 2>/dev/null || echo "")
+QA_LOG=$(cat docs/.logging-last-completed 2>/dev/null || echo "")
 QA_FILENAME=$(basename "$QA_LOG")
-QA_STATUS=$( [[ "$qa_success" == "true" ]] && echo "done" || echo "failed" )
+QA_STATUS=$( [[ "$qa_success" == "true" ]] && echo "✅ done" || echo "❌ failed" )
+QA_LINK=$( [[ -n "$QA_FILENAME" ]] && echo "[${QA_FILENAME}](decisions/${QA_FILENAME})" || echo "(log unavailable)" )
 [[ -n "$QA_LOG" && -f "$QA_LOG" ]] && cp "$QA_LOG" "docs/${TASK_ID}/decisions/" || true
-sed -i "/^## Outcome/i | 2 | qa | adversarial | [log](decisions/${QA_FILENAME}) | ${QA_STATUS} |" "docs/${TASK_ID}/overview.md"
 [[ -f tests/gemini_missing_coverage.md ]] && cp tests/gemini_missing_coverage.md "docs/${TASK_ID}/qa/" || true
 ```
+
+Use the Edit tool to update `docs/${TASK_ID}/overview.md`:
+1. **Pipeline Steps row** — append a QA row:
+   - old_string: `<!-- STEPS_END -->`
+   - new_string (two lines): `| 2 | qa | adversarial | <QA_LINK> | <QA_STATUS> |`, then `<!-- STEPS_END -->`
+2. **Decision Logs entry** — if `QA_FILENAME` is non-empty:
+   - old_string: `<!-- LOGS_END -->`
+   - new_string (two lines): `| <QA_LINK> | qa | <QA_STATUS> |`, then `<!-- LOGS_END -->`
+3. **QA section** — if `docs/${TASK_ID}/qa/gemini_missing_coverage.md` exists:
+   replace `| Missing coverage report | [gemini_missing_coverage.md](qa/gemini_missing_coverage.md) | ⏳ pending |`
+   with    `| Missing coverage report | [gemini_missing_coverage.md](qa/gemini_missing_coverage.md) | ✅ available |`
 
 Overall task success = `primary_success AND (qa_layer is false OR skill was qa OR qa_success)`.
 
@@ -398,5 +461,5 @@ Update `gm-status.md` one final time with the completed state, replacing the hea
 - Sub-skills run with `context: fork` — they have no memory of each other. All coordination happens through files (`docs/`, `tests/`) and the git working tree.
 - `gm-status.md` is intentionally left on disk after completion as a record. Delete it manually if not needed.
 - **Complexity routing**: simple tasks invoke `/implement` directly, skipping brainstorm/decide. The QA layer (`--qa`) still runs after direct-implement — adversarial testing is never skipped.
-- **Env var isolation**: `LOGGING_TASK_DIR` does NOT propagate to `context: fork` sub-skills. The sentinel `docs/.logging-current` (written by `/logging init`, deleted by `/logging outcome`) is the mechanism /gm uses to locate the sub-skill's log and copy it into the wiki's `decisions/` folder.
+- **Log discovery**: Sub-skills call `/logging outcome` internally, which now writes the log path to `docs/.logging-last-completed` before deleting the active sentinel `docs/.logging-current`. The gm reads `.logging-last-completed` after each sub-skill returns — the path persists so gm reliably copies the log into the task wiki. `LOGGING_TASK_DIR` is not used (it doesn't propagate to fork contexts).
 - **Wiki directories** (`docs/YYYYMMDD-HHMM_*/`) are runtime artifacts excluded from version control. They persist for the session and are browsable immediately after a /gm run.
