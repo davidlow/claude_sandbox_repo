@@ -2,7 +2,7 @@
 name: gm
 description: General manager — reads a task list (tasks.md or prompt), creates an isolated git branch per task, invokes the appropriate pipeline skill (architect/refactor/qa), optionally runs a second adversarial QA layer, and merges to base only on full success. Failed branches are preserved for manual review.
 argument-hint: "[--tasks <file>] [--qa] [--no-gemini] [<prompt>]"
-allowed-tools: Read, Write, Bash(date *), Bash(git checkout*), Bash(git merge*), Bash(git branch*), Bash(git log*), Bash(git rev-parse*), Bash(git status*), Bash(git diff*), Bash(git stash*), Bash(mkdir -p *), Bash(ls *), Bash(echo *), Bash(sed *), Bash(grep *), Bash(cat *), Bash(tr *), Bash(cut *), Bash(cp *), Bash(rm -f *), Bash(unset *)
+allowed-tools: Read, Write, Bash(date *), Bash(git checkout*), Bash(git merge*), Bash(git branch*), Bash(git log*), Bash(git rev-parse*), Bash(git status*), Bash(git diff*), Bash(git stash*), Bash(mkdir -p *), Bash(ls *), Bash(echo *), Bash(sed *), Bash(grep *), Bash(cat *), Bash(tr *), Bash(cut *), Bash(cp *), Bash(rm -f *), Bash(unset *), Bash(bash lib/*)
 ---
 
 # General Manager
@@ -260,52 +260,12 @@ Log the outcome:
 /logging note <LOG_FILE> "Task N: <skill-type> result" "✅ success — <task>" (or "❌ failed — <task>")
 ```
 
-**Capture the phase log.** The sub-skill's `/logging outcome` writes the log path to `docs/.logging-last-completed` before deleting the active sentinel — so the path persists after the sub-skill exits:
+**Populate the task wiki** — copy all artifacts and update `overview.md` in one command:
 ```bash
-PHASE_LOG=$(cat docs/.logging-last-completed 2>/dev/null || echo "")
-LOG_FILENAME=$(basename "$PHASE_LOG")
-PHASE_STATUS=$( [[ "$primary_success" == "true" ]] && echo "✅ done" || echo "❌ failed" )
-LOG_LINK=$( [[ -n "$LOG_FILENAME" ]] && echo "[${LOG_FILENAME}](decisions/${LOG_FILENAME})" || echo "(log unavailable)" )
+bash lib/wiki-update.sh "$TASK_ID" "$SKILL_TYPE" 1 \
+  "$( [[ "$primary_success" == "true" ]] && echo success || echo failed )"
 ```
-
-**Copy phase artifacts and decision log into wiki:**
-```bash
-[[ -n "$PHASE_LOG" && -f "$PHASE_LOG" ]] && cp "$PHASE_LOG" "docs/${TASK_ID}/decisions/" || true
-[[ -f docs/architecture_candidates.md ]] && cp docs/architecture_candidates.md "docs/${TASK_ID}/architecture/" || true
-[[ -f docs/approved_architecture.md ]] && cp docs/approved_architecture.md "docs/${TASK_ID}/architecture/" || true
-[[ -f docs/approved_fix.md ]] && cp docs/approved_fix.md "docs/${TASK_ID}/architecture/" || true
-[[ -f docs/gemini_architectural_audit.md ]] && cp docs/gemini_architectural_audit.md "docs/${TASK_ID}/gemini/" || true
-[[ -f tests/gemini_missing_coverage.md ]] && cp tests/gemini_missing_coverage.md "docs/${TASK_ID}/qa/" || true
-```
-
-**Update `docs/${TASK_ID}/overview.md` using the Edit tool.** Make each of the following replacements in order:
-
-1. **Pipeline Steps row** — replace the marker to append a table row:
-   - old_string: `<!-- STEPS_END -->`
-   - new_string (two lines): the new row `| 1 | <SKILL_TYPE> | primary | <LOG_LINK> | <PHASE_STATUS> |`, then `<!-- STEPS_END -->`
-
-2. **Decision Logs entry** — if `LOG_FILENAME` is non-empty, replace the marker:
-   - old_string: `<!-- LOGS_END -->`
-   - new_string (two lines): `| <LOG_LINK> | <SKILL_TYPE> | <PHASE_STATUS> |`, then `<!-- LOGS_END -->`
-
-3. **Architecture section** — for each file that was successfully copied, replace its row's `⏳ pending` with `✅ available`:
-   - If `docs/${TASK_ID}/architecture/architecture_candidates.md` exists:
-     replace `| Brainstorm candidates | [architecture_candidates.md](architecture/architecture_candidates.md) | ⏳ pending |`
-     with    `| Brainstorm candidates | [architecture_candidates.md](architecture/architecture_candidates.md) | ✅ available |`
-   - If `docs/${TASK_ID}/architecture/approved_architecture.md` exists:
-     replace `| Approved design | [approved_architecture.md](architecture/approved_architecture.md) | ⏳ pending |`
-     with    `| Approved design | [approved_architecture.md](architecture/approved_architecture.md) | ✅ available |`
-   - If `docs/${TASK_ID}/architecture/approved_fix.md` exists:
-     replace `| Fix spec | [approved_fix.md](architecture/approved_fix.md) | ⏳ pending |`
-     with    `| Fix spec | [approved_fix.md](architecture/approved_fix.md) | ✅ available |`
-
-4. **Gemini Audit section** — if `docs/${TASK_ID}/gemini/gemini_architectural_audit.md` exists:
-   replace `| Architectural critique | [gemini_architectural_audit.md](gemini/gemini_architectural_audit.md) | ⏳ pending |`
-   with    `| Architectural critique | [gemini_architectural_audit.md](gemini/gemini_architectural_audit.md) | ✅ available |`
-
-5. **QA section** — if `docs/${TASK_ID}/qa/gemini_missing_coverage.md` exists:
-   replace `| Missing coverage report | [gemini_missing_coverage.md](qa/gemini_missing_coverage.md) | ⏳ pending |`
-   with    `| Missing coverage report | [gemini_missing_coverage.md](qa/gemini_missing_coverage.md) | ✅ available |`
+This script locates the phase log, copies it and all generated artifacts into the wiki subdirectories, and updates the Pipeline Steps, Decision Logs, and artifact sections of `overview.md` atomically.
 
 ### 4d. QA Layer (optional second pass)
 
@@ -324,26 +284,11 @@ Log:
 /logging note <LOG_FILE> "Task N: QA layer" "✅ passed" (or "❌ failed")
 ```
 
-**Update the task wiki with QA results:**
+**Populate the task wiki with QA results:**
 ```bash
-QA_LOG=$(cat docs/.logging-last-completed 2>/dev/null || echo "")
-QA_FILENAME=$(basename "$QA_LOG")
-QA_STATUS=$( [[ "$qa_success" == "true" ]] && echo "✅ done" || echo "❌ failed" )
-QA_LINK=$( [[ -n "$QA_FILENAME" ]] && echo "[${QA_FILENAME}](decisions/${QA_FILENAME})" || echo "(log unavailable)" )
-[[ -n "$QA_LOG" && -f "$QA_LOG" ]] && cp "$QA_LOG" "docs/${TASK_ID}/decisions/" || true
-[[ -f tests/gemini_missing_coverage.md ]] && cp tests/gemini_missing_coverage.md "docs/${TASK_ID}/qa/" || true
+bash lib/wiki-update.sh "$TASK_ID" "qa" 2 \
+  "$( [[ "$qa_success" == "true" ]] && echo success || echo failed )" adversarial
 ```
-
-Use the Edit tool to update `docs/${TASK_ID}/overview.md`:
-1. **Pipeline Steps row** — append a QA row:
-   - old_string: `<!-- STEPS_END -->`
-   - new_string (two lines): `| 2 | qa | adversarial | <QA_LINK> | <QA_STATUS> |`, then `<!-- STEPS_END -->`
-2. **Decision Logs entry** — if `QA_FILENAME` is non-empty:
-   - old_string: `<!-- LOGS_END -->`
-   - new_string (two lines): `| <QA_LINK> | qa | <QA_STATUS> |`, then `<!-- LOGS_END -->`
-3. **QA section** — if `docs/${TASK_ID}/qa/gemini_missing_coverage.md` exists:
-   replace `| Missing coverage report | [gemini_missing_coverage.md](qa/gemini_missing_coverage.md) | ⏳ pending |`
-   with    `| Missing coverage report | [gemini_missing_coverage.md](qa/gemini_missing_coverage.md) | ✅ available |`
 
 Overall task success = `primary_success AND (qa_layer is false OR skill was qa OR qa_success)`.
 
@@ -461,5 +406,6 @@ Update `gm-status.md` one final time with the completed state, replacing the hea
 - Sub-skills run with `context: fork` — they have no memory of each other. All coordination happens through files (`docs/`, `tests/`) and the git working tree.
 - `gm-status.md` is intentionally left on disk after completion as a record. Delete it manually if not needed.
 - **Complexity routing**: simple tasks invoke `/implement` directly, skipping brainstorm/decide. The QA layer (`--qa`) still runs after direct-implement — adversarial testing is never skipped.
-- **Log discovery**: Sub-skills call `/logging outcome` internally, which now writes the log path to `docs/.logging-last-completed` before deleting the active sentinel `docs/.logging-current`. The gm reads `.logging-last-completed` after each sub-skill returns — the path persists so gm reliably copies the log into the task wiki. `LOGGING_TASK_DIR` is not used (it doesn't propagate to fork contexts).
+- **Log discovery**: `/logging init` writes the log path to `docs/.logging-<pipeline>-last` (e.g. `docs/.logging-architect-last`) at startup — this file is never deleted. `lib/wiki-update.sh` reads it as the primary mechanism to find the sub-skill's log. If missing, the script falls back to the newest matching `docs/decisions/*_<skill>.md` file. `LOGGING_TASK_DIR` is not used (it doesn't propagate to fork contexts).
+- **Wiki population**: After each sub-skill returns, call `bash lib/wiki-update.sh "$TASK_ID" "$SKILL_TYPE" <step> <success|failed>`. The script handles all artifact copying and `overview.md` updates atomically — do not attempt to do these manually.
 - **Wiki directories** (`docs/YYYYMMDD-HHMM_*/`) are runtime artifacts excluded from version control. They persist for the session and are browsable immediately after a /gm run.
