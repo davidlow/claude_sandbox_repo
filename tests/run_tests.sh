@@ -41,6 +41,8 @@ UNIT_TESTS=(
     test_ensure_logging_dirs.sh
     test_gemini_api_key_injection.sh
     test_freshen_credentials.sh
+    test_logging_sh.sh
+    test_gm_status_sh.sh
 )
 
 # Legacy integration tests (Docker + credentials, run the actual Claude binary)

@@ -2,7 +2,7 @@
 name: refactor
 description: Three-phase bug fix and refactoring pipeline. Phase 1 (haiku): diagnose and propose 3 solution options. Phase 2 (sonnet): evaluate and write a step-by-step fix plan. Phase 3: implement the plan and run tests. Mirrors launch-refactor.sh.
 argument-hint: "<bug or refactor description> [--no-gemini]"
-allowed-tools: Read, Write, Bash(date *), Bash(git diff*), Bash(python3 *), Bash(source /workspace/lib/launch-lib.sh*), Bash(mktemp), Bash(rm -f *), Bash(mkdir -p *), Bash(ls *), Bash(echo *)
+allowed-tools: Read, Write, Bash(date *), Bash(git diff*), Bash(python3 *), Bash(source /workspace/lib/launch-lib.sh*), Bash(mktemp), Bash(rm -f *), Bash(mkdir -p *), Bash(ls *), Bash(echo *), Bash(bash lib/*)
 ---
 
 # Refactor Pipeline
@@ -20,11 +20,10 @@ Announce: "🚀 Starting /refactor pipeline for: <target>"
 
 ## Step 2: Initialize Decision Log
 
+Run the logging script and capture the returned path as `LOG_FILE`:
+```bash
+LOG_FILE=$(bash lib/logging.sh init refactor "$TARGET" claude-sonnet-4-6)
 ```
-/logging init refactor <target> claude-sonnet-4-6
-```
-
-Capture the returned path as `LOG_FILE`.
 
 ## Step 3: Capture Current State
 
@@ -55,14 +54,14 @@ Check that `docs/refactor_candidates.md` exists.
 ```
 
 **If still missing after retry:**
-```
-/logging outcome <LOG_FILE> failed "Phase 1 diagnosis did not produce candidates file"
+```bash
+bash lib/logging.sh outcome "$LOG_FILE" failed "Phase 1 diagnosis did not produce candidates file"
 ```
 Report failure and exit.
 
 **On success:**
-```
-/logging section <LOG_FILE> "Phase 1: Diagnosis" docs/refactor_candidates.md
+```bash
+bash lib/logging.sh section "$LOG_FILE" "Phase 1: Diagnosis" docs/refactor_candidates.md
 ```
 
 ## Step 5: Phase 2 — Select Approach (sonnet, isolated context)
@@ -80,14 +79,14 @@ After it returns, check that `docs/approved_fix.md` exists.
 ```
 
 **If still missing after retry:**
-```
-/logging outcome <LOG_FILE> failed "Phase 2 evaluation did not produce an approved fix plan"
+```bash
+bash lib/logging.sh outcome "$LOG_FILE" failed "Phase 2 evaluation did not produce an approved fix plan"
 ```
 Report failure and exit.
 
 **On success:**
-```
-/logging section <LOG_FILE> "Phase 2: Approved Fix" docs/approved_fix.md
+```bash
+bash lib/logging.sh section "$LOG_FILE" "Phase 2: Approved Fix" docs/approved_fix.md
 ```
 
 ## Step 6: Phase 3 — Implement Fix (isolated context)
@@ -100,14 +99,14 @@ Invoke `/implement` in refactor mode:
 After it returns:
 
 **On success ("✅ Implementation complete — all tests passing"):**
-```
-/logging outcome <LOG_FILE> success
+```bash
+bash lib/logging.sh outcome "$LOG_FILE" success
 ```
 Report: "✅ /refactor pipeline complete. Decision log: <LOG_FILE>"
 
 **On failure ("❌ Tests failing"):**
-```
-/logging outcome <LOG_FILE> failed "Implementation complete but tests are failing"
+```bash
+bash lib/logging.sh outcome "$LOG_FILE" failed "Implementation complete but tests are failing"
 ```
 
 If `gemini_enabled=true`, offer a diagnostic:
@@ -117,8 +116,8 @@ If `gemini_enabled=true`, offer a diagnostic:
 Then report: "⚠️ /refactor: implementation done but tests failing. Gemini diagnosis written to GEMINI_ADVICE.md. Decision log: <LOG_FILE>"
 
 **On other failure:**
-```
-/logging outcome <LOG_FILE> failed "<error summary>"
+```bash
+bash lib/logging.sh outcome "$LOG_FILE" failed "<error summary>"
 ```
 Report failure with decision log path.
 

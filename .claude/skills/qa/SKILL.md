@@ -2,7 +2,7 @@
 name: qa
 description: Two-phase adversarial test generation pipeline. Phase 1: write comprehensive tests and pass them. Gemini red-team audit identifies coverage gaps. Phase 2: implement missing test cases and pass the full suite. Mirrors launch-qa.sh.
 argument-hint: "<scope description> [--no-gemini]"
-allowed-tools: Read, Write, Bash(date *), Bash(python3 *), Bash(source /workspace/lib/launch-lib.sh*), Bash(find . *), Bash(head -c *), Bash(wc -c *), Bash(mktemp), Bash(rm -f *), Bash(mkdir -p *), Bash(ls *), Bash(echo *)
+allowed-tools: Read, Write, Bash(date *), Bash(python3 *), Bash(source /workspace/lib/launch-lib.sh*), Bash(find . *), Bash(head -c *), Bash(wc -c *), Bash(mktemp), Bash(rm -f *), Bash(mkdir -p *), Bash(ls *), Bash(echo *), Bash(bash lib/*)
 ---
 
 # QA Pipeline
@@ -20,11 +20,10 @@ Announce: "🚀 Starting /qa pipeline for: <scope>"
 
 ## Step 2: Initialize Decision Log
 
+Run the logging script and capture the returned path as `LOG_FILE`:
+```bash
+LOG_FILE=$(bash lib/logging.sh init qa "$SCOPE" claude-sonnet-4-6)
 ```
-/logging init qa <scope> claude-sonnet-4-6
-```
-
-Capture the returned path as `LOG_FILE`.
 
 ## Step 3: Phase 1 — Test Generation (isolated context)
 
@@ -42,14 +41,14 @@ List any new test files created:
 git diff --name-only HEAD | grep -E '(test|spec)' || true
 ```
 
-```
-/logging note <LOG_FILE> "Phase 1: Test Generation" "Tests written and passing — new/modified test files: <list from git diff, or 'see working tree'>"
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Phase 1: Test Generation" "Tests written and passing — new/modified test files: <list>"
 ```
 Proceed to Gemini audit.
 
 **On failure:**
-```
-/logging note <LOG_FILE> "Phase 1: Test Generation" "FAILED — tests could not all pass"
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Phase 1: Test Generation" "FAILED — tests could not all pass"
 ```
 
 If `gemini_enabled=false`: finalize log with failure, report to user, and exit.
@@ -72,18 +71,18 @@ Count the missing test cases identified (grep for numbered list items):
 grep -c '^\s*[0-9]\+\.' tests/gemini_missing_coverage.md 2>/dev/null || echo "unknown"
 ```
 
-```
-/logging note <LOG_FILE> "Gemini QA Audit" "completed — <N> missing cases identified → tests/gemini_missing_coverage.md"
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Gemini QA Audit" "completed — <N> missing cases identified → tests/gemini_missing_coverage.md"
 ```
 Proceed to Phase 2.
 
 If the file was not created:
-```
-/logging note <LOG_FILE> "Gemini QA Audit" "skipped or failed — no missing coverage file produced"
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Gemini QA Audit" "skipped or failed — no missing coverage file produced"
 ```
 Finalize log based on Phase 1 outcome:
-```
-/logging outcome <LOG_FILE> <Phase 1 status>
+```bash
+bash lib/logging.sh outcome "$LOG_FILE" "<Phase 1 status>"
 ```
 Report Phase 1 result to user and exit.
 
@@ -97,14 +96,14 @@ Invoke `/implement` with the remediation task:
 After it returns:
 
 **On success:**
-```
-/logging outcome <LOG_FILE> success "Both phases complete — all tests passing including Gemini-identified gaps"
+```bash
+bash lib/logging.sh outcome "$LOG_FILE" success "Both phases complete — all tests passing including Gemini-identified gaps"
 ```
 Report: "✅ /qa pipeline complete. All tests passing. Decision log: <LOG_FILE>"
 
 **On failure:**
-```
-/logging outcome <LOG_FILE> failed "Phase 2 remediation did not achieve fully passing suite"
+```bash
+bash lib/logging.sh outcome "$LOG_FILE" failed "Phase 2 remediation did not achieve fully passing suite"
 ```
 Report failure with decision log path.
 

@@ -55,15 +55,14 @@ git status --porcelain
 ```
 If output is non-empty, warn: "⚠️ Working tree has uncommitted changes — feature branches will be created from current (potentially dirty) state."
 
-Initialize the decision log — use the task file name or the first 60 chars of free_text as the description:
+Initialize the decision log:
+```bash
+LOG_FILE=$(bash lib/logging.sh init gm "<description>" claude-sonnet-4-6)
 ```
-/logging init gm <description> claude-sonnet-4-6
-```
-Capture the returned file path as `LOG_FILE`.
 
 Log the base branch and flags:
-```
-/logging note <LOG_FILE> "Configuration" "Base: <BASE_BRANCH> | QA layer: <qa_layer> | Gemini: <enabled/disabled>"
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Configuration" "Base: <BASE_BRANCH> | QA layer: <qa_layer> | Gemini: <enabled/disabled>"
 ```
 
 ## Step 3: Build Task List
@@ -88,24 +87,17 @@ Print the task plan:
 ```
 
 Log the full task plan:
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Task Plan" "N tasks identified: 1. [architect] <task1> | 2. [refactor] <task2> | ..."
 ```
-/logging note <LOG_FILE> "Task Plan" "N tasks identified: 1. [architect] <task1> | 2. [refactor] <task2> | ..."
-```
 
-Write the initial `gm-status.md` with all tasks listed as pending:
-
-```markdown
-# GM Status
-
-**Started:** <timestamp>
-**Base branch:** <BASE_BRANCH>
-**Progress:** 0 / N tasks complete
-
-| # | Skill | Task | Branch | Status |
-|---|-------|------|--------|--------|
-| 1 | architect | Add user authentication | pending | ⏳ pending |
-| 2 | refactor | Fix login session timeout | pending | ⏳ pending |
-| 3 | qa | Write tests for payment module | pending | ⏳ pending |
+Create `gm-status.md` and populate it with all tasks:
+```bash
+bash lib/gm-status.sh init "$BASE_BRANCH" N "$(date '+%Y-%m-%d %H:%M')"
+bash lib/gm-status.sh set-task 1 architect "Add user authentication"
+bash lib/gm-status.sh set-task 2 refactor "Fix login session timeout"
+bash lib/gm-status.sh set-task 3 qa "Write tests for payment module"
+# (repeat set-task for each task in the list)
 ```
 
 ## Step 3b: Complexity Assessment
@@ -136,8 +128,8 @@ Print the annotated plan:
 ```
 
 Log the complexity decisions:
-```
-/logging note <LOG_FILE> "Complexity Assessment" "Task 1: simple (direct-implement) | Task 2: standard (architect) | ..."
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Complexity Assessment" "Task 1: simple (direct-implement) | Task 2: standard (architect) | ..."
 ```
 
 
@@ -156,55 +148,7 @@ Before creating the feature branch, set up the per-task wiki directory:
 SLUG=$(echo "<task-text>" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\{2,\}/-/g' | sed 's/^-//;s/-$//' | cut -c1-40)
 DATE=$(date +%Y%m%d-%H%M)
 TASK_ID="${DATE}_${SLUG}"
-mkdir -p "docs/${TASK_ID}/decisions" "docs/${TASK_ID}/architecture" "docs/${TASK_ID}/qa" "docs/${TASK_ID}/gemini"
-```
-
-Write the initial `docs/${TASK_ID}/overview.md`:
-
-```markdown
-# Task: <task description>
-
-**Task ID:** <task-id>
-**Date:** <YYYY-MM-DD HH:MM>
-**Branch:** <pending>
-**Status:** in-progress
-**Complexity:** <simple|standard>
-
-## Pipeline Steps
-
-| Step | Skill | Phase | Log | Status |
-|------|-------|-------|-----|--------|
-<!-- STEPS_END -->
-
-## Architecture
-
-| Artifact | Link | Status |
-|----------|------|--------|
-| Brainstorm candidates | [architecture_candidates.md](architecture/architecture_candidates.md) | ⏳ pending |
-| Approved design | [approved_architecture.md](architecture/approved_architecture.md) | ⏳ pending |
-| Fix spec | [approved_fix.md](architecture/approved_fix.md) | ⏳ pending |
-
-## Gemini Audit
-
-| Artifact | Link | Status |
-|----------|------|--------|
-| Architectural critique | [gemini_architectural_audit.md](gemini/gemini_architectural_audit.md) | ⏳ pending |
-
-## QA
-
-| Artifact | Link | Status |
-|----------|------|--------|
-| Missing coverage report | [gemini_missing_coverage.md](qa/gemini_missing_coverage.md) | ⏳ pending |
-
-## Decision Logs
-
-| Log | Pipeline | Status |
-|-----|----------|--------|
-<!-- LOGS_END -->
-
-## Outcome
-
-*(pending)*
+bash lib/wiki-init.sh "$TASK_ID" "<task-text>" "<simple|standard>" "$BASE_BRANCH"
 ```
 
 Announce: "📁 Task wiki: docs/${TASK_ID}/"
@@ -220,17 +164,17 @@ git checkout -b "$BRANCH"
 ```
 
 If `git checkout -b` fails, log:
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Task N: Branch" "❌ Could not create branch — skipped: <task>"
+bash lib/gm-status.sh update N "" "❌ branch failed"
 ```
-/logging note <LOG_FILE> "Task N: Branch" "❌ Could not create branch — skipped: <task>"
-```
-Update `gm-status.md` row N to `❌ branch failed`, add to results as failed, and continue to next task (staying on base branch).
+Add to results as failed and continue to next task (staying on base branch).
 
-On success, log:
+On success, log and update status:
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Task N: Branch" "✅ Created <branch>"
+bash lib/gm-status.sh update N "$BRANCH" "⚙️ running <skill-type>"
 ```
-/logging note <LOG_FILE> "Task N: Branch" "✅ Created <branch>"
-```
-
-Update `gm-status.md` row N: change `pending` to `⚙️ running [skill-type]` and fill in the branch name.
 
 Update the `**Branch:**` line in `docs/${TASK_ID}/overview.md` with the actual branch name:
 ```bash
@@ -256,8 +200,8 @@ Wait for the skill to complete. Note whether the final output contains:
 - `❌` or "failing" or "failed" → **primary_success = false**
 
 Log the outcome:
-```
-/logging note <LOG_FILE> "Task N: <skill-type> result" "✅ success — <task>" (or "❌ failed — <task>")
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Task N: <skill-type> result" "✅ success — <task>"  # or ❌ failed
 ```
 
 **Populate the task wiki** — copy all artifacts and update `overview.md` in one command:
@@ -280,8 +224,8 @@ Note the outcome:
 - `❌` → **qa_success = false**
 
 Log:
-```
-/logging note <LOG_FILE> "Task N: QA layer" "✅ passed" (or "❌ failed")
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Task N: QA layer" "✅ passed"  # or ❌ failed
 ```
 
 **Populate the task wiki with QA results:**
@@ -301,14 +245,16 @@ git merge --no-ff "$BRANCH" -m "gm: <task-text>"
 ```
 
 If `git merge` fails (conflict):
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Task N: Merge" "⚠️ Conflict — branch preserved: <branch>"
+bash lib/gm-status.sh update N "$BRANCH" "⚠️ merge conflict"
 ```
-/logging note <LOG_FILE> "Task N: Merge" "⚠️ Conflict — branch preserved: <branch>"
-```
-Update `gm-status.md` row N to `⚠️ merge conflict`. Treat as failed.
+Treat as failed.
 
 On clean merge:
-```
-/logging note <LOG_FILE> "Task N: Merge" "✅ Merged to <BASE_BRANCH>"
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Task N: Merge" "✅ Merged to <BASE_BRANCH>"
+bash lib/gm-status.sh update N "$BRANCH" "✅ merged"
 ```
 Record `{task, branch, skill, status: "✅ merged"}`.
 
@@ -318,7 +264,6 @@ If `tasks_file` exists, update its checkbox: change `- [ ] <task-text>` to `- [x
 ```bash
 sed -i "s/\*\*Status:\*\* in-progress/**Status:** success/" "docs/${TASK_ID}/overview.md"
 sed -i "s/\*(pending)\*/All phases completed and merged to ${BASE_BRANCH}/" "docs/${TASK_ID}/overview.md"
-unset LOGGING_TASK_DIR
 ```
 
 **On failure:**
@@ -327,8 +272,9 @@ git checkout "$BASE_BRANCH"
 ```
 
 Leave the failed branch alive.
-```
-/logging note <LOG_FILE> "Task N: Merge" "❌ Not merged — branch preserved: <branch>"
+```bash
+bash lib/logging.sh note "$LOG_FILE" "Task N: Merge" "❌ Not merged — branch preserved: <branch>"
+bash lib/gm-status.sh update N "$BRANCH" "❌ failed"
 ```
 Record `{task, branch, skill, status: "❌ failed — branch preserved"}`.
 
@@ -338,34 +284,19 @@ Log immediately: "❌ Task failed — branch preserved for review: $BRANCH"
 ```bash
 sed -i "s/\*\*Status:\*\* in-progress/**Status:** failed/" "docs/${TASK_ID}/overview.md"
 sed -i "s/\*(pending)\*/Failed — branch preserved: ${BRANCH}/" "docs/${TASK_ID}/overview.md"
-unset LOGGING_TASK_DIR
 ```
 
 Continue to the next task.
 
-**After every task (success or failure):** rewrite `gm-status.md` with the full updated results table so the user can check progress at any time:
-
-```markdown
-# GM Status
-
-**Started:** <timestamp>
-**Base branch:** <BASE_BRANCH>
-**Progress:** <done> / <total> tasks complete (last updated: <HH:MM>)
-
-| # | Skill | Task | Branch | Status |
-|---|-------|------|--------|--------|
-| 1 | architect | Add user authentication | gm/20260624-0910-add-user-auth | ✅ merged |
-| 2 | refactor | Fix login session timeout | gm/20260624-0935-fix-login-ses | ❌ failed |
-| 3 | qa | Write tests for payment module | pending | ⏳ pending |
-```
 
 ## Step 5: Summary Report and Finalize Log
 
 Count successes and failures from the results table.
 
-Finalize the decision log:
-```
-/logging outcome <LOG_FILE> <success|failed> "<N> merged, <M> failed"
+Finalize the decision log and gm-status:
+```bash
+bash lib/logging.sh outcome "$LOG_FILE" "<success|failed>" "<N> merged, <M> failed"
+bash lib/gm-status.sh done <N-merged> <M-failed>
 ```
 Use `success` if all tasks merged, `failed` if any failed.
 
@@ -391,11 +322,6 @@ If any tasks failed:
 If all tasks succeeded:
 - Print: "✅ All tasks complete and merged to <BASE_BRANCH>"
 - Print: "Decision log: `<LOG_FILE>`"
-
-Update `gm-status.md` one final time with the completed state, replacing the header with:
-```
-**Status: COMPLETE** — <N> merged, <M> failed
-```
 
 ## Notes
 
