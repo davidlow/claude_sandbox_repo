@@ -165,6 +165,13 @@ Parse the remaining arguments as `<status>` and optional `<notes>`.
 <notes (if provided)>
 ```
 
+### Write last-completed sentinel:
+
+Before deleting, persist the log path so orchestrators (like `/gm`) can find this log after the skill exits:
+```bash
+echo "<absolute-path-of-log-file>" > docs/.logging-last-completed
+```
+
 ### Delete sentinel:
 
 After finalizing: `rm -f docs/.logging-current`
