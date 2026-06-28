@@ -2,7 +2,7 @@
 name: gm
 description: General manager — reads a task list (tasks.md or prompt), creates an isolated git branch per task, invokes the appropriate pipeline skill (architect/refactor/qa), optionally runs a second adversarial QA layer, and merges to base only on full success. Failed branches are preserved for manual review.
 argument-hint: "[--tasks <file>] [--qa] [--no-gemini] [<prompt>]"
-allowed-tools: Read, Write, Bash(date *), Bash(git checkout*), Bash(git merge*), Bash(git branch*), Bash(git log*), Bash(git rev-parse*), Bash(git status*), Bash(git diff*), Bash(git stash*), Bash(mkdir -p *), Bash(ls *), Bash(echo *), Bash(sed *), Bash(grep *), Bash(cat *), Bash(tr *), Bash(cut *)
+allowed-tools: Read, Write, Bash(date *), Bash(git checkout*), Bash(git merge*), Bash(git branch*), Bash(git log*), Bash(git rev-parse*), Bash(git status*), Bash(git diff*), Bash(git stash*), Bash(mkdir -p *), Bash(ls *), Bash(echo *), Bash(sed *), Bash(grep *), Bash(cat *), Bash(tr *), Bash(cut *), Bash(cp *), Bash(rm -f *), Bash(unset *)
 ---
 
 # General Manager
@@ -108,6 +108,39 @@ Write the initial `gm-status.md` with all tasks listed as pending:
 | 3 | qa | Write tests for payment module | pending | ⏳ pending |
 ```
 
+## Step 3b: Complexity Assessment
+
+For each task in the list, evaluate whether it is **simple** or **standard**:
+
+**Simple** — ALL of the following must be true:
+- Narrowly scoped: modifies one specific function, adds a log line, renames a variable, updates a config value, or makes a localized mechanical change
+- No ambiguity about the correct approach — no design decision is required
+- Does not introduce new abstractions, new APIs, new modules, or cross-cutting concerns
+- Can be fully described in one sentence without qualifications
+
+**Standard** — ANY of the following makes a task standard:
+- Requires choosing between multiple viable design approaches
+- Introduces a new system component, module, or interface contract
+- Has non-obvious interactions with other parts of the codebase
+- Task description contains hedging language ("might", "explore", "consider", "redesign")
+- The implementer would need to make a significant judgment call before writing code
+
+**QA-type tasks are always standard** — the full adversarial pipeline always benefits them.
+
+Print the annotated plan:
+```
+📋 Task plan:
+  1. [architect / simple]   Add a log line to the auth handler
+  2. [architect / standard] Add plugin system for payment providers
+  3. [qa]                   Write tests for auth module
+```
+
+Log the complexity decisions:
+```
+/logging note <LOG_FILE> "Complexity Assessment" "Task 1: simple (direct-implement) | Task 2: standard (architect) | ..."
+```
+
+
 ## Step 4: Execute Tasks
 
 Initialize a results tracking table (in memory):
@@ -115,7 +148,45 @@ Initialize a results tracking table (in memory):
 
 For each task in order:
 
-### 4a. Create Isolated Branch
+### 4a. Create Task Wiki Directory
+
+Before creating the feature branch, set up the per-task wiki directory:
+
+```bash
+SLUG=$(echo "<task-text>" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\{2,\}/-/g' | sed 's/^-//;s/-$//' | cut -c1-40)
+DATE=$(date +%Y%m%d-%H%M)
+TASK_ID="${DATE}_${SLUG}"
+mkdir -p "docs/${TASK_ID}/decisions" "docs/${TASK_ID}/architecture" "docs/${TASK_ID}/qa" "docs/${TASK_ID}/gemini"
+```
+
+Write the initial `docs/${TASK_ID}/overview.md`:
+
+```markdown
+# Task: <task description>
+
+**Task ID:** <task-id>
+**Date:** <YYYY-MM-DD HH:MM>
+**Branch:** <pending>
+**Status:** in-progress
+**Complexity:** <simple|standard>
+
+## Pipeline Steps
+
+| Step | Skill | Phase | Log | Status |
+|------|-------|-------|-----|--------|
+## Outcome
+
+*(pending)*
+```
+
+Export the task directory so sub-skills route their logs here:
+```bash
+export LOGGING_TASK_DIR="docs/${TASK_ID}"
+```
+
+Announce: "📁 Task wiki: docs/${TASK_ID}/"
+
+### 4b. Create Isolated Branch
 
 Generate a URL-safe slug from the task description:
 ```bash
@@ -138,16 +209,24 @@ On success, log:
 
 Update `gm-status.md` row N: change `pending` to `⚙️ running [skill-type]` and fill in the branch name.
 
+Update the `**Branch:**` line in `docs/${TASK_ID}/overview.md` with the actual branch name:
+```bash
+sed -i "s/\*\*Branch:\*\* <pending>/**Branch:** ${BRANCH}/" "docs/${TASK_ID}/overview.md"
+```
+
 Announce: "🌿 Branch created: $BRANCH"
 Announce: "⚙️  Running /[skill-type]: <task>"
 
-### 4b. Invoke Pipeline Skill
+### 4c. Invoke Pipeline Skill
 
-Based on detected type, invoke the skill with the task text and flags:
+Route based on task type AND complexity:
 
-- **architect**: `/architect <task-text> $gemini_flag`
-- **refactor**: `/refactor <task-text> $gemini_flag`
-- **qa**: `/qa <task-text> $gemini_flag`
+- If task type is **qa**: invoke `/qa <task-text> $gemini_flag`
+- If task type is **architect** or **refactor** AND complexity is **simple**: invoke `/implement <task-text>` (standalone direct-task mode — no spec file, skips brainstorm/decide phases)
+- If task type is **architect** AND complexity is **standard**: invoke `/architect <task-text> $gemini_flag`
+- If task type is **refactor** AND complexity is **standard**: invoke `/refactor <task-text> $gemini_flag`
+
+For the overview.md row label, use `direct (simple task)` for simple-complexity tasks and the skill type name for standard tasks.
 
 Wait for the skill to complete. Note whether the final output contains:
 - `✅` and "complete" or "passing" → **primary_success = true**
@@ -158,7 +237,25 @@ Log the outcome:
 /logging note <LOG_FILE> "Task N: <skill-type> result" "✅ success — <task>" (or "❌ failed — <task>")
 ```
 
-### 4c. QA Layer (optional second pass)
+**Capture the log filename from `docs/.logging-current` BEFORE calling `/logging outcome`** (which deletes the sentinel). Append a row to `docs/${TASK_ID}/overview.md`:
+```bash
+PHASE_LOG=$(cat docs/.logging-current 2>/dev/null || echo "")
+LOG_FILENAME=$(basename "$PHASE_LOG")
+PHASE_STATUS=$( [[ "$primary_success" == "true" ]] && echo "done" || echo "failed" )
+sed -i "/^## Outcome/i | 1 | ${SKILL_TYPE} | primary | [log](decisions/${LOG_FILENAME}) | ${PHASE_STATUS} |" "docs/${TASK_ID}/overview.md"
+```
+
+**Copy phase artifacts and decision log into wiki:**
+```bash
+[[ -n "$PHASE_LOG" && -f "$PHASE_LOG" ]] && cp "$PHASE_LOG" "docs/${TASK_ID}/decisions/" || true
+[[ -f docs/architecture_candidates.md ]] && cp docs/architecture_candidates.md "docs/${TASK_ID}/architecture/" || true
+[[ -f docs/approved_architecture.md ]] && cp docs/approved_architecture.md "docs/${TASK_ID}/architecture/" || true
+[[ -f docs/approved_fix.md ]] && cp docs/approved_fix.md "docs/${TASK_ID}/architecture/" || true
+[[ -f docs/gemini_architectural_audit.md ]] && cp docs/gemini_architectural_audit.md "docs/${TASK_ID}/gemini/" || true
+[[ -f tests/gemini_missing_coverage.md ]] && cp tests/gemini_missing_coverage.md "docs/${TASK_ID}/qa/" || true
+```
+
+### 4d. QA Layer (optional second pass)
 
 Only if `qa_layer=true` AND `primary_success=true` AND the skill type was `architect` or `refactor`:
 
@@ -175,9 +272,19 @@ Log:
 /logging note <LOG_FILE> "Task N: QA layer" "✅ passed" (or "❌ failed")
 ```
 
+**Append a QA layer row to `docs/${TASK_ID}/overview.md`:**
+```bash
+QA_LOG=$(cat docs/.logging-current 2>/dev/null || echo "")
+QA_FILENAME=$(basename "$QA_LOG")
+QA_STATUS=$( [[ "$qa_success" == "true" ]] && echo "done" || echo "failed" )
+[[ -n "$QA_LOG" && -f "$QA_LOG" ]] && cp "$QA_LOG" "docs/${TASK_ID}/decisions/" || true
+sed -i "/^## Outcome/i | 2 | qa | adversarial | [log](decisions/${QA_FILENAME}) | ${QA_STATUS} |" "docs/${TASK_ID}/overview.md"
+[[ -f tests/gemini_missing_coverage.md ]] && cp tests/gemini_missing_coverage.md "docs/${TASK_ID}/qa/" || true
+```
+
 Overall task success = `primary_success AND (qa_layer is false OR skill was qa OR qa_success)`.
 
-### 4d. Merge or Preserve
+### 4e. Merge or Preserve
 
 **On full success:**
 ```bash
@@ -199,6 +306,13 @@ Record `{task, branch, skill, status: "✅ merged"}`.
 
 If `tasks_file` exists, update its checkbox: change `- [ ] <task-text>` to `- [x] <task-text>` using sed.
 
+**Finalize overview.md on success:**
+```bash
+sed -i "s/\*\*Status:\*\* in-progress/**Status:** success/" "docs/${TASK_ID}/overview.md"
+sed -i "s/\*(pending)\*/All phases completed and merged to ${BASE_BRANCH}/" "docs/${TASK_ID}/overview.md"
+unset LOGGING_TASK_DIR
+```
+
 **On failure:**
 ```bash
 git checkout "$BASE_BRANCH"
@@ -211,6 +325,13 @@ Leave the failed branch alive.
 Record `{task, branch, skill, status: "❌ failed — branch preserved"}`.
 
 Log immediately: "❌ Task failed — branch preserved for review: $BRANCH"
+
+**Finalize overview.md on failure:**
+```bash
+sed -i "s/\*\*Status:\*\* in-progress/**Status:** failed/" "docs/${TASK_ID}/overview.md"
+sed -i "s/\*(pending)\*/Failed — branch preserved: ${BRANCH}/" "docs/${TASK_ID}/overview.md"
+unset LOGGING_TASK_DIR
+```
 
 Continue to the next task.
 
@@ -276,3 +397,6 @@ Update `gm-status.md` one final time with the completed state, replacing the hea
 - Git branches provide the isolation "sandbox" — each feature is contained, rollback is `git checkout <base>`, and failures never touch working code on the base branch.
 - Sub-skills run with `context: fork` — they have no memory of each other. All coordination happens through files (`docs/`, `tests/`) and the git working tree.
 - `gm-status.md` is intentionally left on disk after completion as a record. Delete it manually if not needed.
+- **Complexity routing**: simple tasks invoke `/implement` directly, skipping brainstorm/decide. The QA layer (`--qa`) still runs after direct-implement — adversarial testing is never skipped.
+- **Env var isolation**: `LOGGING_TASK_DIR` does NOT propagate to `context: fork` sub-skills. The sentinel `docs/.logging-current` (written by `/logging init`, deleted by `/logging outcome`) is the mechanism /gm uses to locate the sub-skill's log and copy it into the wiki's `decisions/` folder.
+- **Wiki directories** (`docs/YYYYMMDD-HHMM_*/`) are runtime artifacts excluded from version control. They persist for the session and are browsable immediately after a /gm run.

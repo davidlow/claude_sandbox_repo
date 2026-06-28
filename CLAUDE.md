@@ -51,7 +51,7 @@ Building blocks (usable standalone):
 /decide [architect|refactor] <task>       # evaluate candidates → docs/approved_*.md
 /implement [architect|refactor|<task>]    # execute a spec or direct task
 /geminiapi [architect-critique|qa-audit|refactor-diagnosis|dispatch] <task>
-/logging [init|section|note|outcome|read] <pipeline> <args>
+/logging [init|section|note|outcome|read] <pipeline> <args>   # supports --task-dir <path> and LOGGING_TASK_DIR env var
 ```
 
 ## Architecture
@@ -59,10 +59,31 @@ Building blocks (usable standalone):
 ### Logging Directories
 
 Two directories are auto-created at launch time by both `launch-scripted.sh` and `launch-interactive.sh`:
-- `docs/decisions/` — timestamped Markdown logs (one per pipeline run). Created by `/logging init`; finalized by `/logging outcome`. Claude should call these at the start and end of any architect/qa/refactor pipeline run.
+- `docs/decisions/` — timestamped Markdown logs (one per pipeline run). Created by `/logging init`; finalized by `/logging outcome`. Claude should call these at the start and end of any architect/qa/refactor pipeline run. When `/gm` is running, logs are also copied to `docs/YYYYMMDD-HHMM_task-summary/decisions/` (see Wiki Structure below).
 - `docs/progress/` — real-time JSONL event stream (`current.jsonl`). Written by `/logging progress`. Users can `tail -f docs/progress/current.jsonl` in a second terminal to monitor active sessions.
 
 Claude does not need to create these directories manually — they exist before the container starts.
+
+### Wiki Structure
+
+`/gm` creates a per-task directory in `docs/` for each task it manages. Standalone pipeline runs (`/architect`, `/qa`, `/refactor` invoked directly) still write to `docs/decisions/` and are unaffected.
+
+**Discovery mechanism:** Folder names in `docs/` matching `YYYYMMDD-HHMM_<task-slug>/` are task wiki directories. There is no central registry file — the folder names themselves are the index.
+
+**Per-task directory:** `docs/YYYYMMDD-HHMM_task-summary/` — created by `/gm` before invoking the first sub-skill. Contains:
+- `overview.md` — live status and primary recovery document: task metadata, Pipeline Steps table (one row per completed phase), and final Outcome section. A new Claude instance can read this to determine where to resume after a mid-run interruption.
+- `decisions/` — decision logs copied here after each phase completes (sourced from `docs/decisions/` via the `docs/.logging-current` sentinel).
+- `architecture/` — copies of `docs/architecture_candidates.md` and `docs/approved_architecture.md` after architect phases.
+- `qa/` — copies of QA artifacts (e.g., `tests/gemini_missing_coverage.md`) after qa phases.
+- `gemini/` — copies of Gemini outputs (e.g., `docs/gemini_architectural_audit.md`) after gemini phases.
+
+**Task ID format:** `YYYYMMDD-HHMM_<task-slug>` where `<task-slug>` is derived from the task description (lowercased, non-alphanumeric replaced with hyphens, truncated to 40 chars). Example: `20260626-2034_add-user-authentication`.
+
+**Routing mechanism:** Decision logs are always written to `docs/decisions/` by sub-skills (env vars don't propagate through `context: fork`). `/gm` reads the sentinel `docs/.logging-current` after each phase to locate the log, then copies it into `docs/<task-id>/decisions/`. The sentinel is written by `/logging init` and deleted by `/logging outcome`.
+
+**`docs/.logging-current`:** A single-line file containing the absolute path of the currently-active decision log. Written by `/logging init`; deleted by `/logging outcome`. Lets `note`, `section`, and `outcome` find the active log without hardcoding `docs/decisions/`. Absent when no log is open.
+
+**Recovery:** To resume a mid-run task, open `docs/YYYYMMDD-HHMM_task-summary/overview.md` and read the Pipeline Steps table to determine which phases completed. Resume from the last successful step.
 
 ### Authentication flow
 `~/.claude/.credentials.json` (host) → OAuth tokens extracted by Python one-liner → injected as `CLAUDE_CODE_OAUTH_TOKEN` / `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` env vars into the container → bypasses Claude Code's first-run browser wizard.
@@ -115,7 +136,8 @@ Pipeline skills (in `.claude/skills/`) use `context: fork` — each phase spawns
 | `tests/run_tests.sh` | Test runner — `--unit` (no Docker) or `--int` (full integration) |
 | `tests/test_*.sh` | Individual test files: unit tests for bash functions + integration tests |
 | `tests/fixtures/` | Fake credential JSON files used by unit tests |
-| `docs/decisions/` | Timestamped decision logs from pipeline runs (YYYYMMDD_HHMM_description_stage.md) |
+| `docs/decisions/` | Timestamped decision logs from standalone pipeline runs (YYYYMMDD_HHMM_description_stage.md) |
+| `docs/YYYYMMDD-HHMM_task-summary/overview.md` | Per-task live status and recovery document created by `/gm` |
 | `legacy/` | Superseded bash pipeline scripts (`launch-architect.sh`, `launch-qa.sh`, etc.) |
 
 ## Style Notes
