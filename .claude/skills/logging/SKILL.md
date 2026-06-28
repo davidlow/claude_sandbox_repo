@@ -62,9 +62,14 @@ Write this header to the file:
 <task description>
 ```
 
-### Write sentinel:
+### Write sentinels:
 
-Compute the absolute path of the log file and write it as a single line to `docs/.logging-current`. Use `echo` or `printf` — do not require additional tools.
+Compute the absolute path of the log file and write it to TWO files:
+1. Active sentinel: `echo "<absolute-path>" > docs/.logging-current`
+2. Persistent sentinel: `echo "<absolute-path>" > docs/.logging-<pipeline>-last`
+   (where `<pipeline>` is the pipeline argument, e.g. `architect`, `qa`, `gm`, `refactor`)
+
+The `-last` file is never deleted by any action and is read by `lib/wiki-update.sh` to locate this log reliably after the skill exits and the active sentinel is gone.
 
 ### Output:
 
