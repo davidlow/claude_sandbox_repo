@@ -466,6 +466,66 @@ Rules:
 }
 
 # ---------------------------------------------------------------------------
+# freshen_credentials <creds_file>
+# Checks if the OAuth access token in creds_file is within
+# CREDS_REFRESH_BUFFER_SECONDS (default: 300) of expiry. If so — or if the
+# expiresAt field is absent or unparseable — runs `claude auth status` on the
+# host to trigger a native refresh, which writes updated tokens back to the
+# bind-mounted ~/.claude/ directory.
+#
+# Always returns 0. Any internal failure is logged to stderr and execution
+# continues with the existing (possibly stale) token — no regression vs. the
+# previous behaviour where no freshness check was performed.
+# If creds_file does not exist, returns 0 immediately (the caller handles the
+# missing-file error path).
+# ---------------------------------------------------------------------------
+freshen_credentials() {
+    local creds_file="$1"
+    local CREDS_REFRESH_BUFFER_SECONDS="${CREDS_REFRESH_BUFFER_SECONDS:-300}"
+    local needs_refresh=false
+    local expires_at=""
+
+    # Creds file missing: return immediately; caller handles this.
+    [ ! -f "$creds_file" ] && return 0
+
+    # Extract expiresAt (milliseconds epoch). If absent or unparseable, refresh.
+    expires_at=$(python3 -c "
+import json, sys
+try:
+    with open('$creds_file') as f:
+        d = json.load(f)
+    val = d.get('claudeAiOauth', {}).get('expiresAt')
+    if val is None:
+        sys.exit(1)
+    print(int(val))
+except Exception:
+    sys.exit(1)
+" 2>/dev/null) || needs_refresh=true
+
+    if [ "$needs_refresh" = false ] && [ -n "$expires_at" ]; then
+        local now_ms buffer_ms threshold
+        # Prefer date +%s%3N (GNU); fall back to Python for portability.
+        now_ms=$(date +%s%3N 2>/dev/null) || \
+            now_ms=$(python3 -c "import time; print(int(time.time()*1000))")
+        buffer_ms=$(( CREDS_REFRESH_BUFFER_SECONDS * 1000 ))
+        threshold=$(( now_ms + buffer_ms ))
+        # Refresh if token expires within the buffer window.
+        if [ "$expires_at" -le "$threshold" ] 2>/dev/null; then
+            needs_refresh=true
+        fi
+    fi
+
+    if [ "$needs_refresh" = true ]; then
+        echo "[claude-box] Refreshing OAuth token..." >&2
+        claude auth status 2>/dev/null || true
+    else
+        echo "[claude-box] OAuth token is fresh." >&2
+    fi
+
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # decision_log_init <file> <pipeline> <task> <model>
 # Creates a new timestamped decision log with a standard markdown header.
 # The parent directory is created if it does not exist.

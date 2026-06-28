@@ -35,6 +35,9 @@ else
     echo "⚠️  ~/.claude.json not found — will be created on first run."
 fi
 
+# Token freshness is checked automatically by launch-interactive.sh and
+# launch-scripted.sh; this script is only needed for first-time bootstrap
+# or after a full re-login.
 # Extract tokens for the bootstrap call.
 OAUTH_TOKEN=$(python3 -c "
 import json

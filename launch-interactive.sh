@@ -37,6 +37,9 @@ if [ ! -f "$CREDS" ]; then
     exit 1
 fi
 
+source "$(dirname "$0")/lib/launch-lib.sh"
+freshen_credentials "$CREDS"
+
 CHOSEN_MODEL="${1:-claude-sonnet-4-6}"
 SANITIZED_DIR=$(basename "$(pwd)" | tr -cs '[:alnum:]-' '-' | tr '[:upper:]' '[:lower:]')
 CONTAINER_NAME="claude-interactive-${SANITIZED_DIR:-sandbox}-$$"
@@ -62,7 +65,6 @@ fi
 
 echo "🛡️  Spawning interactive sandbox using model: $CHOSEN_MODEL"
 
-source "$(dirname "$0")/lib/launch-lib.sh"
 source "$(dirname "$0")/lib/progress-lib.sh"
 write_progress_event "session" "started" "Interactive session starting (model: $CHOSEN_MODEL)" "interactive"
 ensure_logging_dirs
